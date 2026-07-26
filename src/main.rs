@@ -91,9 +91,16 @@ async fn main() -> Result<()> {
 
     let (load_tx, mut load_rx) = mpsc::unbounded_channel();
 
-    // Must happen before entering the alternate screen: this writes a terminal
-    // query to stdout and reads the reply. It also starts the encoder thread,
-    // which reports finished cover art through the same load channel.
+    // ratatui::init installs a panic hook that restores the terminal, so a
+    // crash cannot leave the user with an unusable shell.
+    let mut terminal = ratatui::init();
+    // Mouse capture is not part of ratatui::init, so it is enabled and torn
+    // down here. Without the matching disable, the terminal keeps emitting
+    // mouse escape sequences after we exit.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+
+    // Cover art detection writes a terminal query to stdout and reads the reply.
+    // Done inside alternate screen so the queries do not disturb the main screen.
     let mut covers = CoverRenderer::detect(load_tx.clone());
 
     let mut app = App::new(
@@ -135,14 +142,6 @@ async fn main() -> Result<()> {
         Err(err) => app.status_message = Some(format!("Discord: {err:#}")),
     }
 
-    // ratatui::init installs a panic hook that restores the terminal, so a
-    // crash cannot leave the user with an unusable shell.
-    let mut terminal = ratatui::init();
-    // Mouse capture is not part of ratatui::init, so it is enabled and torn
-    // down here. Without the matching disable, the terminal keeps emitting
-    // mouse escape sequences after we exit.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
-
     let result = run(
         &mut terminal,
         &mut app,
@@ -154,6 +153,7 @@ async fn main() -> Result<()> {
 
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
+    let _ = std::io::Write::flush(&mut std::io::stdout());
 
     result
 }

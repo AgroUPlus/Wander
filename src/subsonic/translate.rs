@@ -132,6 +132,8 @@ mod tests {
             translate_url: "http://localhost:5000/translate".into(),
             translate_api_key: String::new(),
             translate_to: "en".into(),
+            fetch_online: true,
+            lrclib_url: "https://lrclib.net".into(),
         }
     }
 

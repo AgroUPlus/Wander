@@ -27,7 +27,8 @@ install -m 755 target/release/wander "${BIN_DIR}/wander"
 
 echo "==> Installing desktop entry"
 mkdir -p "$APP_DIR" "$ICON_DIR"
-install -m 644 packaging/wander.desktop "${APP_DIR}/wander.desktop"
+sed "s|^Exec=wander|Exec=${BIN_DIR}/wander|" packaging/wander.desktop > "${APP_DIR}/wander.desktop"
+chmod 644 "${APP_DIR}/wander.desktop"
 install -m 644 packaging/wander.svg "${ICON_DIR}/wander.svg"
 
 # Refresh the launcher's cache so the entry and icon show up immediately.

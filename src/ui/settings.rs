@@ -79,6 +79,8 @@ pub enum SettingItem {
     DiscordEnabled,
     DiscordClientId,
     DiscordCoverArt,
+    FetchOnlineLyrics,
+    LrclibUrl,
 
     // Queue columns
     QueueColumn(usize),
@@ -116,9 +118,11 @@ impl SettingItem {
                 Section::Playback
             }
 
-            Self::DiscordEnabled | Self::DiscordClientId | Self::DiscordCoverArt => {
-                Section::Integrations
-            }
+            Self::DiscordEnabled
+            | Self::DiscordClientId
+            | Self::DiscordCoverArt
+            | Self::FetchOnlineLyrics
+            | Self::LrclibUrl => Section::Integrations,
 
             Self::QueueColumn(_) | Self::AddQueueColumn => Section::QueueColumns,
             Self::ShowKeybindings => Section::Keys,
@@ -136,6 +140,7 @@ impl SettingItem {
                 | Self::AddLocalPath
                 | Self::LocalPlaylistDir
                 | Self::DiscordClientId
+                | Self::LrclibUrl
         )
     }
 
@@ -178,6 +183,8 @@ impl SettingItem {
             Self::DiscordEnabled => "Discord Rich Presence".into(),
             Self::DiscordClientId => "Discord application ID".into(),
             Self::DiscordCoverArt => "Discord cover art".into(),
+            Self::FetchOnlineLyrics => "Online lyrics (LRCLIB)".into(),
+            Self::LrclibUrl => "LRCLIB server URL".into(),
 
             Self::QueueColumn(index) => format!("Column {}", index + 1),
             Self::AddQueueColumn => "Add column".into(),
@@ -221,6 +228,8 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::DiscordEnabled,
         SettingItem::DiscordClientId,
         SettingItem::DiscordCoverArt,
+        SettingItem::FetchOnlineLyrics,
+        SettingItem::LrclibUrl,
     ]);
 
     rows.extend((0..config.queue_columns.len()).map(SettingItem::QueueColumn));
@@ -341,6 +350,14 @@ fn value_of(app: &App, item: SettingItem) -> String {
             }
         }
         SettingItem::DiscordCoverArt => on_off(config.discord.cover_art),
+        SettingItem::FetchOnlineLyrics => on_off(config.lyrics.fetch_online),
+        SettingItem::LrclibUrl => {
+            if config.lyrics.lrclib_url.is_empty() {
+                "https://lrclib.net (default)".into()
+            } else {
+                config.lyrics.lrclib_url.clone()
+            }
+        }
 
         SettingItem::QueueColumn(index) => config
             .queue_columns

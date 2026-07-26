@@ -192,17 +192,17 @@ impl Theme {
         Self {
             background: ThemeColor(Color::Reset),
             foreground: ThemeColor(Color::Reset),
-            border: ThemeColor(Color::Indexed(8)),         // Dark Gray (color 8)
+            border: ThemeColor(Color::Indexed(8)), // Dark Gray (color 8)
             border_focused: ThemeColor(Color::Indexed(6)), // Cyan (color 6)
-            accent: ThemeColor(Color::Indexed(6)),         // Cyan (color 6)
-            highlight_bg: ThemeColor(Color::Indexed(8)),   // Dark Gray selection background
-            highlight_fg: ThemeColor(Color::Indexed(15)),  // Bright White text
+            accent: ThemeColor(Color::Indexed(6)), // Cyan (color 6)
+            highlight_bg: ThemeColor(Color::Indexed(8)), // Dark Gray selection background
+            highlight_fg: ThemeColor(Color::Indexed(15)), // Bright White text
             current_track: ThemeColor(Color::Indexed(2)), // Green (color 2)
-            dim: ThemeColor(Color::Indexed(8)),           // Dark Gray (color 8)
-            progress: ThemeColor(Color::Indexed(4)),      // Blue (color 4)
-            error: ThemeColor(Color::Indexed(1)),         // Red (color 1)
-            viz_low: ThemeColor(Color::Indexed(2)),       // Green (color 2)
-            viz_high: ThemeColor(Color::Indexed(5)),      // Magenta (color 5)
+            dim: ThemeColor(Color::Indexed(8)),    // Dark Gray (color 8)
+            progress: ThemeColor(Color::Indexed(4)), // Blue (color 4)
+            error: ThemeColor(Color::Indexed(1)),  // Red (color 1)
+            viz_low: ThemeColor(Color::Indexed(2)), // Green (color 2)
+            viz_high: ThemeColor(Color::Indexed(5)), // Magenta (color 5)
         }
     }
 
@@ -402,7 +402,9 @@ pub fn parse_color(text: &str) -> Option<Color> {
         .or_else(|| lower.strip_prefix("ansi"))
         .unwrap_or(&lower);
 
-    let trimmed = cleaned.trim().trim_matches(|c| c == '(' || c == ')' || c == ':' || c == ',');
+    let trimmed = cleaned
+        .trim()
+        .trim_matches(|c| c == '(' || c == ')' || c == ':' || c == ',');
     if let Ok(idx) = trimmed.trim().parse::<u8>() {
         return Some(Color::Indexed(idx));
     }

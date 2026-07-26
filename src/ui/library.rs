@@ -53,13 +53,10 @@ fn list_pane(
 /// Artists, albums and tracks are three ways into the same library rather than
 /// separate destinations, so they share one tab and one header.
 pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).split(area);
-    draw_mode_selector(frame, rows[0], app, theme, hits);
-
     match app.library_mode {
-        LibraryMode::Artists => draw_artists(frame, rows[1], app, theme, hits),
-        LibraryMode::Albums => draw_albums(frame, rows[1], app, theme, hits),
-        LibraryMode::Playlists => draw_playlists(frame, rows[1], app, theme, hits),
+        LibraryMode::Artists => draw_artists(frame, area, app, theme, hits),
+        LibraryMode::Albums => draw_albums(frame, area, app, theme, hits),
+        LibraryMode::Playlists => draw_playlists(frame, area, app, theme, hits),
         LibraryMode::Tracks => {
             let songs: Vec<String> = app
                 .tracks
@@ -69,7 +66,7 @@ pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
             let focused = app.focus == Pane::Tracks;
             list_pane(
                 frame,
-                rows[1],
+                area,
                 "Tracks",
                 songs,
                 &mut app.track_sel,
@@ -88,7 +85,7 @@ pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
             let focused = app.focus == Pane::Favorites;
             list_pane(
                 frame,
-                rows[1],
+                area,
                 "Favorites",
                 songs,
                 &mut app.favorite_sel,
@@ -101,7 +98,13 @@ pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
     }
 }
 
-fn draw_mode_selector(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut Hits) {
+pub fn draw_mode_selector(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    theme: &Theme,
+    hits: &mut Hits,
+) {
     let mut spans = vec![Span::styled("  ", theme.dim())];
     let mut x = area.x + 2;
     for (index, mode) in LibraryMode::ALL.iter().enumerate() {

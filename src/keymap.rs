@@ -55,6 +55,8 @@ pub enum Action {
     CycleLyricVariant,
     /// Ask the configured translation endpoint for the current lyrics.
     TranslateLyrics,
+    /// Fetch missing or synced lyrics online from LRCLIB.
+    FetchOnlineLyrics,
     ToggleRadio,
     ToggleStar,
     ResizePaneLeft,
@@ -128,14 +130,12 @@ impl Action {
             | Left | Right | FocusNext | FocusPrev | Confirm | Cancel => Category::Navigation,
             LibraryModeNext | LibraryModePrev | JumpToArtist | JumpToAlbum | ToggleStar
             | RatingUp | RatingDown | AddToPlaylist | Share => Category::Library,
-            CycleLyricVariant | TranslateLyrics => Category::Panels,
+            CycleLyricVariant | TranslateLyrics | FetchOnlineLyrics => Category::Panels,
             AddToQueue | PlayNext | RemoveFromQueue | ClearQueue | MoveTrackUp | MoveTrackDown
             | UndoQueue => Category::Queue,
             ToggleQueuePane | ToggleCoverPane | ToggleLyricsPane | ToggleVisualiser
             | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight
-            | ResizePaneUp | ResizePaneDown => {
-                Category::Panels
-            }
+            | ResizePaneUp | ResizePaneDown => Category::Panels,
             OpenPalette => Category::Navigation,
             Quit | Refresh | ToggleHelp => Category::Misc,
         }
@@ -179,6 +179,7 @@ impl Action {
             Action::CycleVisualiser => "cycle visualiser style",
             Action::CycleLyricVariant => "cycle lyric language / romanisation",
             Action::TranslateLyrics => "translate the current lyrics",
+            Action::FetchOnlineLyrics => "fetch lyrics online (LRCLIB)",
             Action::ToggleRadio => "radio mode (auto-queue)",
             Action::ToggleStar => "star / unstar track",
             Action::FocusNext => "focus the next pane (e.g. Up Next)",
@@ -296,6 +297,7 @@ impl Default for Keymap {
         bind(KeyCode::Char('V'), s, CycleVisualiser);
         bind(KeyCode::Char('Y'), s, CycleLyricVariant);
         bind(KeyCode::Char('T'), s, TranslateLyrics);
+        bind(KeyCode::Char('l'), c, FetchOnlineLyrics);
         bind(KeyCode::Char('x'), n, ToggleRadio);
         bind(KeyCode::Char('*'), n, ToggleStar);
 
@@ -465,6 +467,7 @@ impl Action {
             CycleVisualiser,
             CycleLyricVariant,
             TranslateLyrics,
+            FetchOnlineLyrics,
             ToggleRadio,
             ToggleStar,
             ResizePaneLeft,

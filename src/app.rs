@@ -842,8 +842,10 @@ impl App {
     /// Load lyrics for the playing track, preferring the on-disk cache.
     ///
     /// Negative results are cached too, so a track without lyrics is not
-    /// re-requested every time it plays.
-    fn sync_lyrics(&mut self, song_id: Option<String>) {
+    /// re-requested every time it plays. If no local/server lyrics exist,
+    /// queries LRCLIB online if enabled.
+    fn sync_lyrics(&mut self, song: Option<&crate::subsonic::models::Song>) {
+        let song_id = song.map(|s| s.id.clone());
         if self.lyrics_song == song_id {
             return;
         }
@@ -851,22 +853,41 @@ impl App {
         self.lyrics = Default::default();
         self.lyrics_scroll = 0.0;
 
-        let Some(song_id) = song_id else {
+        let Some(song) = song.cloned() else {
             self.lyrics_pending = false;
             return;
         };
 
         self.lyrics_pending = true;
+        let song_id = song.id.clone();
         let library = Arc::clone(&self.library);
         let cache = Arc::clone(&self.lyrics_cache);
+        let http = self.http.clone();
+        let lyrics_config = self.config.lyrics.clone();
+
         self.spawn_load(async move {
-            if let Some(cached) = cache.get(&song_id) {
+            if let Some(cached) = cache.get(&song_id)
+                && (!cached.is_empty() || !lyrics_config.fetch_online)
+            {
                 return Ok(LoadEvent::Lyrics {
                     song_id,
                     lyrics: Box::new(cached),
                 });
             }
-            let lyrics = library.lyrics(&song_id).await.unwrap_or_default();
+
+            let mut lyrics = library.lyrics(&song_id).await.unwrap_or_default();
+            if lyrics.is_empty()
+                && lyrics_config.fetch_online
+                && let Some(online) = crate::subsonic::online_lyrics::fetch_online_lyrics(
+                    &http,
+                    &lyrics_config,
+                    &song,
+                )
+                .await
+            {
+                lyrics = online;
+            }
+
             Ok(LoadEvent::Lyrics {
                 song_id,
                 lyrics: Box::new(lyrics),
@@ -946,10 +967,48 @@ impl App {
         });
     }
 
+    /// Manually fetch lyrics online (LRCLIB) for the playing track.
+    fn fetch_online_lyrics_action(&mut self) {
+        let Some(song) = self.player.status().current else {
+            self.status_message = Some("No track currently playing".to_string());
+            return;
+        };
+
+        let song_id = song.id.clone();
+        let http = self.http.clone();
+        let config = self.config.lyrics.clone();
+        let mut set = self.lyrics.clone();
+
+        self.status_message = Some("Searching online lyrics (LRCLIB)…".to_string());
+        self.lyrics_pending = true;
+
+        self.spawn_load(async move {
+            if let Some(online) =
+                crate::subsonic::online_lyrics::fetch_online_lyrics(&http, &config, &song).await
+            {
+                if set.is_empty() {
+                    set = online;
+                } else {
+                    for variant in online.variants {
+                        set.push_active(variant);
+                    }
+                }
+                Ok(LoadEvent::Lyrics {
+                    song_id,
+                    lyrics: Box::new(set),
+                })
+            } else {
+                Ok(LoadEvent::Error(
+                    "No online lyrics found on LRCLIB".to_string(),
+                ))
+            }
+        });
+    }
+
     /// Keep the cover and lyrics in sync with the playing track.
     pub fn sync_cover(&mut self) {
         let current = self.player.status().current;
-        self.sync_lyrics(current.as_ref().map(|song| song.id.clone()));
+        self.sync_lyrics(current.as_ref());
 
         let wanted = current.and_then(|song| song.cover_art.clone());
         if wanted != self.cover_id {
@@ -1198,6 +1257,7 @@ impl App {
             }
             Action::CycleLyricVariant => self.cycle_lyric_variant(),
             Action::TranslateLyrics => self.translate_lyrics(),
+            Action::FetchOnlineLyrics => self.fetch_online_lyrics_action(),
             Action::ToggleRadio => {
                 let enabled = !self.player.queue.lock().unwrap().radio;
                 self.status_message = Some(if enabled {
@@ -1579,6 +1639,18 @@ impl App {
                 self.config.discord.cover_art = !self.config.discord.cover_art;
                 let _ = self.config.save();
             }
+            SettingItem::FetchOnlineLyrics => {
+                self.config.lyrics.fetch_online = !self.config.lyrics.fetch_online;
+                let _ = self.config.save();
+                self.status_message = Some(format!(
+                    "Online lyrics (LRCLIB): {}",
+                    if self.config.lyrics.fetch_online {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+            }
 
             SettingItem::QueueColumn(index) => {
                 if let Some(column) = self.config.queue_columns.get_mut(index) {
@@ -1599,6 +1671,7 @@ impl App {
             | SettingItem::Rescan
             | SettingItem::ClearQueue
             | SettingItem::DiscordClientId
+            | SettingItem::LrclibUrl
             | SettingItem::AddQueueColumn
             | SettingItem::ShowKeybindings => {}
         }
@@ -1634,6 +1707,7 @@ impl App {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
                 SettingItem::DiscordClientId => self.config.discord.client_id.clone(),
+                SettingItem::LrclibUrl => self.config.lyrics.lrclib_url.clone(),
                 _ => String::new(),
             };
             self.settings_edit =
@@ -1802,6 +1876,11 @@ impl App {
                 let _ = self.config.save();
                 self.status_message =
                     Some("Discord application ID saved (restart to apply)".into());
+            }
+            SettingItem::LrclibUrl => {
+                self.config.lyrics.lrclib_url = value;
+                let _ = self.config.save();
+                self.status_message = Some("LRCLIB server URL saved".into());
             }
             _ => {}
         }

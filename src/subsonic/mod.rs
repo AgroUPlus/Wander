@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod lyrics;
 pub mod models;
+pub mod online_lyrics;
 pub mod translate;
 
 use anyhow::{Context, Result, anyhow, bail};

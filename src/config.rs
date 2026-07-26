@@ -88,6 +88,10 @@ pub struct LyricsConfig {
     pub translate_api_key: String,
     /// Target language code.
     pub translate_to: String,
+    /// Fetch missing lyrics online via LRCLIB when not in local tags/server.
+    pub fetch_online: bool,
+    /// Base URL of LRCLIB API. Defaults to `https://lrclib.net`.
+    pub lrclib_url: String,
 }
 
 impl Default for LyricsConfig {
@@ -96,6 +100,8 @@ impl Default for LyricsConfig {
             translate_url: String::new(),
             translate_api_key: String::new(),
             translate_to: "en".to_string(),
+            fetch_online: true,
+            lrclib_url: "https://lrclib.net".to_string(),
         }
     }
 }

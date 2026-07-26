@@ -44,12 +44,12 @@ pub enum VizMode {
     Vortex,
     /// Holographic prismatic wave fronts intersecting and shimmering on the beat.
     Prism,
-    /// A 3D warp-speed starfield tunnel accelerating on every beat.
-    Hyperdrive,
-    /// Cascading cyber digital rain with transient audio glitch pulses.
-    Matrix,
     /// A glowing solar eclipse with dynamic coronal flare eruptions.
     Eclipse,
+    /// Hypnotic 8-fold symmetrical fractal mandala rendered in high-res Braille sub-cells.
+    Kaleidoscope,
+    /// High-density gaseous cosmic cloud with Braille stardust spiral arms.
+    Nebula,
     /// The raw waveform, drawn with braille for sub-cell resolution.
     Scope,
     /// A scrolling spectrogram: time down the pane, colour by level.
@@ -63,9 +63,9 @@ impl VizMode {
         VizMode::Bloom,
         VizMode::Vortex,
         VizMode::Prism,
-        VizMode::Hyperdrive,
-        VizMode::Matrix,
         VizMode::Eclipse,
+        VizMode::Kaleidoscope,
+        VizMode::Nebula,
         VizMode::Scope,
         VizMode::Waterfall,
     ];
@@ -83,9 +83,9 @@ impl VizMode {
             VizMode::Bloom => "bloom",
             VizMode::Vortex => "vortex",
             VizMode::Prism => "prism",
-            VizMode::Hyperdrive => "hyperdrive",
-            VizMode::Matrix => "matrix",
             VizMode::Eclipse => "eclipse",
+            VizMode::Kaleidoscope => "kaleidoscope",
+            VizMode::Nebula => "nebula",
             VizMode::Scope => "scope",
             VizMode::Waterfall => "waterfall",
         }
@@ -111,27 +111,20 @@ fn band_count(mode: VizMode, width: u16) -> usize {
         | VizMode::Ember
         | VizMode::Aurora
         | VizMode::Prism
-        | VizMode::Matrix => width.max(1) as usize,
+        | VizMode::Kaleidoscope
+        | VizMode::Nebula => width.max(1) as usize,
 
-        VizMode::Bloom | VizMode::Vortex | VizMode::Hyperdrive | VizMode::Eclipse => {
+        VizMode::Bloom | VizMode::Vortex | VizMode::Eclipse => {
             (width / 4).clamp(4, 32) as usize
         }
     }
 }
 
-/// Star particle in 3D space for hyperdrive mode.
-struct Star {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-/// Active falling stream in matrix mode.
-struct MatrixDrop {
-    col: usize,
-    y: f32,
+/// Particle in cosmic nebula spiral galaxy mode.
+struct NebulaParticle {
+    angle: f32,
+    radius: f32,
     speed: f32,
-    length: f32,
 }
 
 /// Frame-to-frame state the effects need: a fire's heat, a ribbon's history, a
@@ -146,10 +139,8 @@ pub struct Visualiser {
     phase: f32,
     /// Rings thrown out by the bloom, oldest first.
     ripples: Vec<Ripple>,
-    /// 3D stars for hyperdrive mode.
-    stars: Vec<Star>,
-    /// Falling rain drops for matrix mode.
-    matrix_drops: Vec<MatrixDrop>,
+    /// Cosmic particles for nebula mode.
+    nebula_particles: Vec<NebulaParticle>,
     /// Smoothed loudness, and the pulse an onset leaves behind.
     energy: f32,
     pulse: f32,
@@ -164,8 +155,7 @@ impl Default for Visualiser {
             heat_size: (0, 0),
             trail: VecDeque::new(),
             ripples: Vec::new(),
-            stars: Vec::new(),
-            matrix_drops: Vec::new(),
+            nebula_particles: Vec::new(),
             phase: 0.0,
             energy: 0.0,
             pulse: 0.0,
@@ -253,9 +243,9 @@ impl Visualiser {
             VizMode::Bloom => self.bloom(spectrum.bars(), area, theme),
             VizMode::Vortex => self.vortex(spectrum.bars(), area, theme),
             VizMode::Prism => self.prism(spectrum.bars(), area, theme),
-            VizMode::Hyperdrive => self.hyperdrive(spectrum.bars(), area, theme),
-            VizMode::Matrix => self.matrix(spectrum.bars(), area, theme),
             VizMode::Eclipse => self.eclipse(spectrum.bars(), area, theme),
+            VizMode::Kaleidoscope => self.kaleidoscope(spectrum.bars(), area, theme),
+            VizMode::Nebula => self.nebula(spectrum.bars(), area, theme),
             VizMode::Scope => scope(spectrum, area, theme),
             VizMode::Waterfall => waterfall(spectrum, area, theme),
         };
@@ -482,17 +472,21 @@ impl Visualiser {
                         let angle = dy.atan2(dx);
 
                         // Pulsing core
-                        let mut intensity = (1.0 - radius / core_radius).max(0.0) * core_energy * 1.6;
+                        let mut intensity =
+                            (1.0 - radius / core_radius).max(0.0) * core_energy * 1.6;
 
                         // Logarithmic spiral arms spinning with phase
                         let spiral_angle = angle - 3.2 * (radius + 0.05).ln() + self.phase * 0.6;
                         let arm_pattern = ((spiral_angle * arm_count).sin() * 0.5 + 0.5).powf(2.5);
 
-                        let band_idx = ((radius.clamp(0.0, 1.0) * (bars.len() as f32 - 1.0)) as usize)
+                        let band_idx = ((radius.clamp(0.0, 1.0) * (bars.len() as f32 - 1.0))
+                            as usize)
                             .min(bars.len().saturating_sub(1));
                         let bar_level = bars.get(band_idx).copied().unwrap_or(0.0);
 
-                        let spiral_glow = arm_pattern * (0.35 + bar_level * 0.95) * (1.0 - radius * 0.75).max(0.0);
+                        let spiral_glow = arm_pattern
+                            * (0.35 + bar_level * 0.95)
+                            * (1.0 - radius * 0.75).max(0.0);
                         intensity = intensity.max(spiral_glow * pulse_boost);
 
                         cell(intensity, theme)
@@ -548,153 +542,6 @@ impl Visualiser {
             .collect()
     }
 
-    /// A 3D warp-speed starfield tunnel: stars spawn at the center and surge
-    /// outward toward the viewer, leaving light trails that stretch on beat hits.
-    fn hyperdrive<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
-        let cols = area.width as usize;
-        let rows = area.height as usize;
-        let (cx, cy) = ((cols as f32 - 1.0) / 2.0, (rows as f32 - 1.0) / 2.0);
-
-        let target_stars = (cols * rows / 8).clamp(30, 200);
-        while self.stars.len() < target_stars {
-            let angle = self.noise() * std::f32::consts::TAU;
-            let dist = self.noise().sqrt() * 0.9 + 0.1;
-            let z = self.noise() * 0.9 + 0.1;
-            self.stars.push(Star {
-                x: angle.cos() * dist,
-                y: angle.sin() * dist,
-                z,
-            });
-        }
-
-        let speed = 0.02 + self.energy * 0.05 + self.pulse * 0.12;
-        let mut respawns = Vec::new();
-        for (i, star) in self.stars.iter_mut().enumerate() {
-            star.z -= speed;
-            if star.z <= 0.04 {
-                respawns.push(i);
-            }
-        }
-        for idx in respawns {
-            let angle = self.noise() * std::f32::consts::TAU;
-            let dist = self.noise().sqrt() * 0.9 + 0.1;
-            self.stars[idx].x = angle.cos() * dist;
-            self.stars[idx].y = angle.sin() * dist;
-            self.stars[idx].z = 1.0;
-        }
-
-        let mut grid = vec![0.0f32; cols * rows];
-        let centroid_val = centroid(bars);
-        let spin_angle = self.phase * 0.4 + centroid_val * 2.0;
-
-        for star in &self.stars {
-            let z = star.z.max(0.04);
-            let rx = star.x * spin_angle.cos() - star.y * spin_angle.sin();
-            let ry = star.x * spin_angle.sin() + star.y * spin_angle.cos();
-
-            let px = cx + (rx / z) * cx * 0.85;
-            let py = cy + (ry / z) * cy * (0.85 / CELL_ASPECT);
-
-            if px >= 0.0 && px < cols as f32 && py >= 0.0 && py < rows as f32 {
-                let col = px as usize;
-                let row = py as usize;
-                let brightness = ((1.0 - z) * (0.5 + self.pulse * 0.8)).clamp(0.0, 1.0);
-
-                let idx = row * cols + col;
-                grid[idx] = grid[idx].max(brightness);
-
-                let trail_steps = (self.pulse * 4.0 + 1.0) as usize;
-                for step in 1..=trail_steps {
-                    let prev_z = z + step as f32 * 0.03;
-                    if prev_z <= 1.0 {
-                        let t_px = cx + (rx / prev_z) * cx * 0.85;
-                        let t_py = cy + (ry / prev_z) * cy * (0.85 / CELL_ASPECT);
-                        if t_px >= 0.0 && t_px < cols as f32 && t_py >= 0.0 && t_py < rows as f32 {
-                            let t_col = t_px as usize;
-                            let t_row = t_py as usize;
-                            let t_idx = t_row * cols + t_col;
-                            let faded = brightness * (1.0 - step as f32 / (trail_steps as f32 + 1.0));
-                            grid[t_idx] = grid[t_idx].max(faded);
-                        }
-                    }
-                }
-            }
-        }
-
-        (0..rows)
-            .map(|row| {
-                let spans = (0..cols)
-                    .map(|col| cell(grid[row * cols + col], theme))
-                    .collect::<Vec<Span>>();
-                Line::from(spans)
-            })
-            .collect()
-    }
-
-    /// Cyberpunk digital rain: falling data drops whose frequency and speed
-    /// react to audio bands, with transient beat glitches across the matrix.
-    fn matrix<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
-        let cols = area.width as usize;
-        let rows = area.height as usize;
-
-        let mut spawns = Vec::new();
-        for (col, level) in bars.iter().enumerate().take(cols) {
-            if *level > 0.15 && self.noise() < *level * 0.35 {
-                spawns.push((col, *level));
-            }
-        }
-        for (col, level) in spawns {
-            self.matrix_drops.push(MatrixDrop {
-                col,
-                y: 0.0,
-                speed: 0.4 + level * 0.8 + self.pulse * 0.6,
-                length: 4.0 + level * 12.0,
-            });
-        }
-
-        for drop in &mut self.matrix_drops {
-            drop.y += drop.speed;
-        }
-        self.matrix_drops.retain(|drop| drop.y - drop.length < rows as f32);
-        if self.matrix_drops.len() > cols * 2 {
-            self.matrix_drops.drain(..cols);
-        }
-
-        let mut grid = vec![0.0f32; cols * rows];
-        for drop in &self.matrix_drops {
-            let col = drop.col;
-            if col >= cols {
-                continue;
-            }
-            let head = drop.y as i32;
-            let tail = (drop.y - drop.length) as i32;
-            for r in tail.max(0)..=head.min(rows as i32 - 1) {
-                let r_usize = r as usize;
-                let dist_from_head = (head - r) as f32;
-                let brightness = (1.0 - dist_from_head / drop.length).max(0.0);
-
-                let idx = r_usize * cols + col;
-                grid[idx] = grid[idx].max(brightness);
-            }
-        }
-
-        if self.pulse > 0.4 {
-            let glitch_row = ((self.noise() * rows as f32) as usize).min(rows.saturating_sub(1));
-            for col in 0..cols {
-                grid[glitch_row * cols + col] = (grid[glitch_row * cols + col] + self.pulse * 0.7).min(1.0);
-            }
-        }
-
-        (0..rows)
-            .map(|row| {
-                let spans = (0..cols)
-                    .map(|col| cell(grid[row * cols + col], theme))
-                    .collect::<Vec<Span>>();
-                Line::from(spans)
-            })
-            .collect()
-    }
-
     /// A celestial solar eclipse: a central dark moon silhouette surrounded by a
     /// brilliant glowing solar corona that flares and erupts to audio frequencies.
     fn eclipse<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
@@ -739,7 +586,8 @@ impl Visualiser {
                             let max_dist = outer_bound - moon_radius;
 
                             let intensity = if r <= outer_bound && max_dist > 0.0 {
-                                (1.0 - edge_dist / max_dist).powf(1.4) * (0.4 + bar_level * 0.8 + self.pulse * 0.5)
+                                (1.0 - edge_dist / max_dist).powf(1.4)
+                                    * (0.4 + bar_level * 0.8 + self.pulse * 0.5)
                             } else {
                                 0.0
                             };
@@ -748,6 +596,182 @@ impl Visualiser {
                         }
                     })
                     .collect::<Vec<Span>>();
+                Line::from(spans)
+            })
+            .collect()
+    }
+
+    /// Hypnotic 8-fold symmetrical fractal mandala rendered in high-res Braille sub-cells.
+    fn kaleidoscope<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+        let cols = area.width as usize;
+        let rows = area.height as usize;
+        let dot_cols = cols * 2;
+        let dot_rows = rows * 4;
+
+        let (cx, cy) = (
+            (dot_cols as f32 - 1.0) / 2.0,
+            (dot_rows as f32 - 1.0) / 2.0,
+        );
+        let max_r = cx.hypot(cy * CELL_ASPECT).max(1.0);
+
+        let lows = bars.len().div_ceil(4).max(1);
+        let bass_level = if bars.is_empty() {
+            0.0
+        } else {
+            bars[..lows.min(bars.len())].iter().sum::<f32>() / lows as f32
+        };
+        let centroid_val = centroid(bars);
+
+        let spin = self.phase * 1.5 + self.pulse * 2.5 + bass_level * 3.0;
+        let k_r = 10.0 + centroid_val * 24.0 + bass_level * 14.0;
+        let k_a = 4.0 + (bass_level * 8.0).round();
+
+        let mut grid = vec![0u8; cols * rows];
+        let mut intensities = vec![0.0f32; cols * rows];
+
+        let sym_sectors = 8.0;
+        let sector_angle = std::f32::consts::TAU / sym_sectors;
+
+        for r in 0..dot_rows {
+            for c in 0..dot_cols {
+                let dx = c as f32 - cx;
+                let dy = (r as f32 - cy) * CELL_ASPECT;
+                let dist = dx.hypot(dy);
+                let norm_r = dist / max_r;
+
+                let mut angle = dy.atan2(dx);
+                if angle < 0.0 {
+                    angle += std::f32::consts::TAU;
+                }
+                let sym_angle = (angle % sector_angle - sector_angle / 2.0).abs();
+
+                let wave = ((norm_r * k_r - spin).sin() + (sym_angle * k_a + spin * 0.7).cos()) * 0.5;
+
+                // Pulsing onset shockwave ring
+                let shockwave = if self.pulse > 0.1 {
+                    let pulse_r = (self.pulse * 1.2).clamp(0.0, 1.0);
+                    (1.0 - (norm_r - pulse_r).abs() / 0.15).max(0.0) * self.pulse
+                } else {
+                    0.0
+                };
+
+                let band_idx = ((norm_r.clamp(0.0, 1.0) * (bars.len() as f32 - 1.0)) as usize)
+                    .min(bars.len().saturating_sub(1));
+                let bar_level = bars.get(band_idx).copied().unwrap_or(0.0);
+
+                let thresh = 0.12 - self.pulse * 0.25 - bass_level * 0.2;
+                if wave > thresh || shockwave > 0.3 {
+                    let cell_idx = (r / 4) * cols + (c / 2);
+                    grid[cell_idx] |= BRAILLE[c % 2][r % 4];
+                    let intensity = ((wave * 0.5 + 0.5 + shockwave)
+                        * (0.45 + bar_level * 0.75 + self.pulse * 0.8))
+                        .clamp(0.0, 1.0);
+                    if intensity > intensities[cell_idx] {
+                        intensities[cell_idx] = intensity;
+                    }
+                }
+            }
+        }
+
+        (0..rows)
+            .map(|row| {
+                let spans: Vec<Span> = (0..cols)
+                    .map(|col| {
+                        let idx = row * cols + col;
+                        let bits = grid[idx];
+                        let intensity = intensities[idx];
+                        if bits == 0 || intensity < FLOOR {
+                            Span::raw(" ")
+                        } else {
+                            let glyph = char::from_u32(0x2800 + bits as u32).unwrap_or(' ');
+                            Span::styled(
+                                glyph.to_string(),
+                                Style::default().fg(shade(intensity, theme)),
+                            )
+                        }
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
+    }
+
+    /// High-density gaseous cosmic cloud with Braille stardust spiral arms.
+    fn nebula<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+        let cols = area.width as usize;
+        let rows = area.height as usize;
+        let dot_cols = cols * 2;
+        let dot_rows = rows * 4;
+        let (cx, cy) = ((dot_cols as f32 - 1.0) / 2.0, (dot_rows as f32 - 1.0) / 2.0);
+
+        let target_particles = (cols * rows * 2).clamp(120, 700);
+        while self.nebula_particles.len() < target_particles {
+            let arm = (self.noise() * 3.0) as usize;
+            let radius = 2.0 + self.noise().powf(1.5) * (dot_cols as f32 * 0.45);
+            let angle = (arm as f32 * std::f32::consts::TAU / 3.0) + radius * 0.08 + self.noise() * 0.4;
+            let speed = 0.012 + (1.0 / (radius + 2.0).sqrt()) * 0.06;
+            self.nebula_particles.push(NebulaParticle {
+                angle,
+                radius,
+                speed,
+            });
+        }
+
+        let lows = bars.len().div_ceil(4).max(1);
+        let bass = if bars.is_empty() {
+            0.0
+        } else {
+            bars[..lows.min(bars.len())].iter().sum::<f32>() / lows as f32
+        };
+
+        let spin_boost = 1.0 + bass * 4.5 + self.pulse * 3.5;
+
+        for p in &mut self.nebula_particles {
+            p.angle += p.speed * spin_boost;
+        }
+
+        let mut grid = vec![0u8; cols * rows];
+        let mut intensities = vec![0.0f32; cols * rows];
+
+        for p in &self.nebula_particles {
+            // Explosive beat pulse expansion & compression
+            let r_eff = p.radius * (1.0 + self.pulse * 0.65 - bass * 0.2);
+            let x = cx + p.angle.cos() * r_eff;
+            let y = cy + (p.angle.sin() * r_eff) / CELL_ASPECT;
+
+            if x >= 0.0 && x < dot_cols as f32 && y >= 0.0 && y < dot_rows as f32 {
+                let dc = x as usize;
+                let dr = y as usize;
+                let cell_idx = (dr / 4) * cols + (dc / 2);
+                grid[cell_idx] |= BRAILLE[dc % 2][dr % 4];
+
+                let norm_r = (r_eff / (dot_cols as f32 * 0.45)).clamp(0.0, 1.0);
+                let intensity =
+                    ((1.0 - norm_r * 0.6) * (0.5 + bass * 0.6 + self.pulse * 0.8)).clamp(0.0, 1.0);
+                if intensity > intensities[cell_idx] {
+                    intensities[cell_idx] = intensity;
+                }
+            }
+        }
+
+        (0..rows)
+            .map(|row| {
+                let spans: Vec<Span> = (0..cols)
+                    .map(|col| {
+                        let idx = row * cols + col;
+                        let bits = grid[idx];
+                        let intensity = intensities[idx];
+                        if bits == 0 || intensity < FLOOR {
+                            Span::raw(" ")
+                        } else {
+                            let glyph = char::from_u32(0x2800 + bits as u32).unwrap_or(' ');
+                            Span::styled(
+                                glyph.to_string(),
+                                Style::default().fg(shade(intensity, theme)),
+                            )
+                        }
+                    })
+                    .collect();
                 Line::from(spans)
             })
             .collect()

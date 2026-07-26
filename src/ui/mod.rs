@@ -125,9 +125,11 @@ pub fn draw(
         draw_focus(frame, rows[0], app, covers, spectrum, viz, &theme, hits);
         player_bar::draw(frame, rows[1], app, &theme, hits);
         frame.render_widget(
-            Paragraph::new("c cover  •  y lyrics  •  Q queue  •  v visualiser  •  F or Esc to leave")
-                .style(theme.dim())
-                .centered(),
+            Paragraph::new(
+                "c cover  •  y lyrics  •  Q queue  •  v visualiser  •  F or Esc to leave",
+            )
+            .style(theme.dim())
+            .centered(),
             rows[2],
         );
         if let Some(active) = app.overlay.as_ref() {
@@ -167,9 +169,8 @@ fn draw_focus(
     hits: &mut Hits,
 ) {
     let (_, queue_percent, viz_height) = app.tween_panes();
-    let show_viz_bottom = app.show_cover_pane
-        && app.show_visualiser
-        && area.height > viz_height + 8;
+    let show_viz_bottom =
+        app.show_cover_pane && app.show_visualiser && area.height > viz_height + 8;
     let show_viz_in_middle = !app.show_cover_pane && app.show_visualiser;
 
     let mut constraints = vec![Constraint::Length(3), Constraint::Min(5)];
@@ -214,12 +215,9 @@ fn draw_focus(
     } else if show_viz_in_middle {
         // Cover is hidden; visualizer takes the cover room!
         if app.show_focus_lyrics && middle.width >= MIN_LYRICS_WIDTH + MIN_COVER_WIDTH {
-            let viz_width = focus_cover_width(
-                middle.width,
-                covers.width_for_height(middle.height),
-                true,
-            )
-            .unwrap_or(middle.width / 2);
+            let viz_width =
+                focus_cover_width(middle.width, covers.width_for_height(middle.height), true)
+                    .unwrap_or(middle.width / 2);
             let columns = Layout::horizontal([
                 Constraint::Length(viz_width),
                 Constraint::Min(MIN_LYRICS_WIDTH),
@@ -311,6 +309,17 @@ fn draw_body(
     // Eased sizes, so resizing glides rather than stepping.
     let (cover_percent, queue_percent, viz_height) = app.tween_panes();
 
+    let (body_area, mode_bar_area) = if app.tab == Tab::Library {
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).split(area);
+        (rows[1], Some(rows[0]))
+    } else {
+        (area, None)
+    };
+
+    if let Some(mode_area) = mode_bar_area {
+        library::draw_mode_selector(frame, mode_area, app, theme, hits);
+    }
+
     let mut constraints = Vec::new();
     constraints.push(Constraint::Min(20));
     if app.show_cover_pane || side_lyrics || app.show_visualiser {
@@ -319,7 +328,7 @@ fn draw_body(
     if side_queue {
         constraints.push(Constraint::Percentage(queue_percent));
     }
-    let columns = Layout::horizontal(constraints).split(area);
+    let columns = Layout::horizontal(constraints).split(body_area);
 
     let mut next = 1;
     let content = columns[0];
