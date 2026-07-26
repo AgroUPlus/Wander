@@ -299,6 +299,10 @@ impl Queue {
         self.repeat = self.repeat.cycle();
     }
 
+    pub fn set_repeat(&mut self, repeat: Repeat) {
+        self.repeat = repeat;
+    }
+
     /// Shuffle the order, keeping the current track at the front so playback
     /// continues uninterrupted.
     fn reshuffle_preserving_current(&mut self, current: Option<usize>) {

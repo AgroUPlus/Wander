@@ -19,6 +19,11 @@ pub enum Action {
     Bottom,
     Left,
     Right,
+    /// Move focus between the panes on screen, whatever Left/Right do on this
+    /// tab. Settings and Home spend the plain arrows on their own contents, so
+    /// without these the side panes are unreachable from the keyboard there.
+    FocusNext,
+    FocusPrev,
     Confirm,
     Cancel,
 
@@ -111,7 +116,7 @@ impl Action {
             TogglePause | Stop | NextTrack | PrevTrack | SeekForward | SeekBackward | VolumeUp
             | VolumeDown | ToggleRepeat | ToggleShuffle | ToggleRadio => Category::Playback,
             NextTab | PrevTab | TabBack | Tab(_) | Up | Down | PageUp | PageDown | Top | Bottom
-            | Left | Right | Confirm | Cancel => Category::Navigation,
+            | Left | Right | FocusNext | FocusPrev | Confirm | Cancel => Category::Navigation,
             LibraryModeNext | LibraryModePrev | JumpToArtist | JumpToAlbum | ToggleStar
             | RatingUp | RatingDown | AddToPlaylist | Share => Category::Library,
             AddToQueue | PlayNext | RemoveFromQueue | ClearQueue | MoveTrackUp | MoveTrackDown
@@ -160,6 +165,8 @@ impl Action {
             Action::ToggleVisualiser => "toggle visualiser",
             Action::ToggleRadio => "radio mode (auto-queue)",
             Action::ToggleStar => "star / unstar track",
+            Action::FocusNext => "focus the next pane (e.g. Up Next)",
+            Action::FocusPrev => "focus the previous pane",
             Action::ResizePaneLeft => "move divider left (wider side panes)",
             Action::ResizePaneRight => "move divider right (wider content)",
             Action::JumpToArtist => "jump to track artist",
@@ -230,6 +237,11 @@ impl Default for Keymap {
         bind(KeyCode::Left, n, Left);
         bind(KeyCode::Char('l'), n, Right);
         bind(KeyCode::Right, n, Right);
+        // Focus cycling that works on every tab, including the ones whose
+        // plain arrows are already spoken for.
+        bind(KeyCode::Right, c, FocusNext);
+        bind(KeyCode::Left, c, FocusPrev);
+        bind(KeyCode::Tab, c, FocusNext);
         bind(KeyCode::Enter, n, Confirm);
         bind(KeyCode::Esc, n, Cancel);
 
@@ -404,6 +416,8 @@ impl Action {
             Bottom,
             Left,
             Right,
+            FocusNext,
+            FocusPrev,
             Confirm,
             Cancel,
             TogglePause,
@@ -674,6 +688,33 @@ mod tests {
         assert_eq!(map.resolve(key('[')), Some(Action::PrevTab));
         let alt_right = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT);
         assert_eq!(map.resolve(alt_right), Some(Action::ResizePaneRight));
+    }
+
+    /// Focus cycling has to be on its own keys: the plain arrows are already
+    /// taken by Home's mix row and by Settings' value editing, so the side
+    /// panes would otherwise be reachable only with the mouse.
+    #[test]
+    fn control_arrows_cycle_focus_without_disturbing_the_plain_ones() {
+        let map = Keymap::default();
+        let ctrl = |code| map.resolve(KeyEvent::new(code, KeyModifiers::CONTROL));
+
+        assert_eq!(ctrl(KeyCode::Right), Some(Action::FocusNext));
+        assert_eq!(ctrl(KeyCode::Left), Some(Action::FocusPrev));
+        assert_eq!(ctrl(KeyCode::Tab), Some(Action::FocusNext));
+
+        // The unmodified keys keep their meanings.
+        let plain = |code| map.resolve(KeyEvent::new(code, KeyModifiers::NONE));
+        assert_eq!(plain(KeyCode::Right), Some(Action::Right));
+        assert_eq!(plain(KeyCode::Left), Some(Action::Left));
+        assert_eq!(plain(KeyCode::Tab), Some(Action::NextTab));
+    }
+
+    /// `[keys]` rebinding looks actions up by name, so a new action that is not
+    /// in `ALL` silently cannot be rebound.
+    #[test]
+    fn the_focus_actions_can_be_rebound_by_name() {
+        assert_eq!(Action::from_name("focus_next"), Some(Action::FocusNext));
+        assert_eq!(Action::from_name("focus_prev"), Some(Action::FocusPrev));
     }
 
     #[test]

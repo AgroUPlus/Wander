@@ -192,16 +192,7 @@ impl PlayerInterface for MprisPlayer {
             LoopStatus::Playlist => Repeat::All,
             LoopStatus::Track => Repeat::One,
         };
-        // The player only exposes a cycle, so step until it matches. The lock
-        // is scoped so no guard is ever held across the await below.
-        for _ in 0..3 {
-            let current = { self.player.queue.lock().unwrap().repeat };
-            if current == wanted {
-                break;
-            }
-            self.player.send(PlayerCommand::ToggleRepeat);
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        self.player.send(PlayerCommand::SetRepeat(wanted));
         Ok(())
     }
 

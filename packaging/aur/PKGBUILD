@@ -1,0 +1,40 @@
+# Maintainer: Kolb <kolb at example dot com>
+pkgname=wander
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Terminal music player for Navidrome/Subsonic & local files"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Kolbxyz/Wander"
+license=('MIT')
+depends=('alsa-lib' 'opus' 'libsecret')
+makedepends=('cargo' 'git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo test --frozen
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 packaging/wander.desktop "$pkgdir/usr/share/applications/wander.desktop"
+  install -Dm644 packaging/wander.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/wander.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

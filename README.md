@@ -95,7 +95,10 @@ Press `?` or `Ctrl+h` inside Wander at any time to display the live keybinding c
 | Key | Action |
 | :--- | :--- |
 | `1` – `4` | Switch directly to Tab 1–4 |
-| `[` / `]` or `Alt+←` / `Alt+→` | Switch to Previous / Next tab |
+| `[` / `]` or `Tab` / `Shift+Tab` | Switch to Previous / Next tab |
+| `Alt+←` / `Alt+→` | Move the pane dividers (resize side panes) |
+| `h` / `l` or `←` / `→` | Move between panes — on Home these walk the mixes, in Settings they change values |
+| `Ctrl+←` / `Ctrl+→` or `Ctrl+Tab` | Cycle pane focus, including the **Up Next** pane, on every tab |
 | `Backspace` | Return to previously focused tab |
 | `Enter` | Play highlighted track / selection |
 | `a` | Append selection to queue |

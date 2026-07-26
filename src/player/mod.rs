@@ -17,7 +17,7 @@ use crate::library::{Library, Source};
 use crate::subsonic::models::Song;
 use decoder::{DecodeOutcome, StreamSource, decode_stream};
 use output::{AudioOutput, AudioShared};
-use queue::Queue;
+use queue::{Queue, Repeat};
 
 /// How many network chunks may sit between the fetcher and the decoder.
 const NETWORK_CHANNEL_DEPTH: usize = 16;
@@ -65,6 +65,7 @@ pub enum PlayerCommand {
     AdjustVolume(f32),
     ToggleShuffle,
     ToggleRepeat,
+    SetRepeat(Repeat),
     /// Toggle radio mode, which keeps the queue topped up automatically.
     ToggleRadio,
     SetStarred {
@@ -368,6 +369,7 @@ impl PlayerTask {
                 });
             }
             PlayerCommand::ToggleRepeat => self.queue.lock().unwrap().toggle_repeat(),
+            PlayerCommand::SetRepeat(repeat) => self.queue.lock().unwrap().set_repeat(repeat),
             PlayerCommand::Remove(index) => {
                 let (removed_current, still_playing) = {
                     let mut queue = self.queue.lock().unwrap();

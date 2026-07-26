@@ -1,0 +1,49 @@
+# Maintainer: Kolb <kolb at example dot com>
+pkgname=wander-git
+_pkgname=wander
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="Terminal music player for Navidrome/Subsonic & local files (development build)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Kolbxyz/Wander"
+license=('MIT')
+depends=('alsa-lib' 'opus' 'libsecret')
+makedepends=('cargo' 'git')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+  printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo test --frozen
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 "target/release/$_pkgname" "$pkgdir/usr/bin/$_pkgname"
+  install -Dm644 packaging/wander.desktop "$pkgdir/usr/share/applications/wander.desktop"
+  install -Dm644 packaging/wander.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/wander.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$_pkgname/LICENSE"
+}

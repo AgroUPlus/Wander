@@ -985,6 +985,11 @@ impl App {
                 }
                 _ => self.focus_by(1),
             },
+            // Unconditional pane cycling. Left/Right are spoken for on Home
+            // (the mix row) and Settings (value editing), so these are the only
+            // way to reach the side panes from the keyboard on those tabs.
+            Action::FocusNext => self.cycle_focus(1),
+            Action::FocusPrev => self.cycle_focus(-1),
             Action::Confirm => self.activate(),
             Action::Cancel => {
                 self.show_help = false;
@@ -1892,6 +1897,21 @@ impl App {
         if !panes.contains(&self.focus) {
             self.focus = panes[0];
         }
+    }
+
+    /// Move focus one pane, wrapping around the ends.
+    ///
+    /// Wrapping is right for a dedicated cycle key — holding it should visit
+    /// every pane — but wrong for Left/Right, where running off the left edge
+    /// should stop rather than teleport to the far right.
+    fn cycle_focus(&mut self, delta: isize) {
+        let panes = self.panes();
+        if panes.is_empty() {
+            return;
+        }
+        let current = panes.iter().position(|p| *p == self.focus).unwrap_or(0) as isize;
+        let next = (current + delta).rem_euclid(panes.len() as isize) as usize;
+        self.focus = panes[next];
     }
 
     fn focus_by(&mut self, delta: isize) {
