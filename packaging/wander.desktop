@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Wander
+GenericName=Music Player
+Comment=Fast TUI music player for Navidrome and local libraries
+Exec=wander
+Icon=wander
+Terminal=true
+Categories=AudioVideo;Audio;Player;
+Keywords=music;navidrome;subsonic;player;tui;
+StartupNotify=true
+StartupWMClass=wander
+
