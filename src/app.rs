@@ -1841,19 +1841,7 @@ impl App {
 
     /// The focusable panes, left to right, in the order Left/Right cycles them.
     pub fn panes(&self) -> Vec<Pane> {
-        let mut panes: Vec<Pane> = match self.tab {
-            Tab::Home => vec![Pane::Home],
-            Tab::Queue => vec![Pane::Queue],
-            Tab::Library => self.library_mode.panes().to_vec(),
-            Tab::Settings => vec![Pane::Settings],
-        };
-        // The Up Next pane sits to the right of everything else, so it is the
-        // last stop when cycling right — reachable from the keyboard rather
-        // than only by clicking it.
-        if self.side_queue_visible() {
-            panes.push(Pane::Queue);
-        }
-        panes
+        focus_order(self.tab, self.library_mode, self.side_queue_visible())
     }
 
     /// Open the Library tab on a given mode, loading it if needed.
@@ -2737,6 +2725,26 @@ fn step_percent(current: u16, direction: i8) -> u16 {
     }
 }
 
+/// The focusable panes of a tab, left to right.
+///
+/// Free-standing and pure so the focus order can be tested without an `App`,
+/// which needs an audio device to exist.
+pub fn focus_order(tab: Tab, library_mode: LibraryMode, side_queue: bool) -> Vec<Pane> {
+    let mut panes: Vec<Pane> = match tab {
+        Tab::Home => vec![Pane::Home],
+        Tab::Queue => vec![Pane::Queue],
+        Tab::Library => library_mode.panes().to_vec(),
+        Tab::Settings => vec![Pane::Settings],
+    };
+    // The Up Next pane is drawn to the right of everything else, so it is the
+    // last stop when cycling right — reachable from the keyboard rather than
+    // only by clicking it.
+    if side_queue {
+        panes.push(Pane::Queue);
+    }
+    panes
+}
+
 /// Expand a leading `~` to the user's home directory.
 ///
 /// Users type `~/Music`; nothing in `std` expands it, and a literal `~`
@@ -2770,6 +2778,58 @@ pub fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Up Next pane used to be reachable only by clicking it: it was drawn
+    /// beside every tab but was in no tab's focus order.
+    #[test]
+    fn the_side_queue_is_the_last_stop_when_cycling_right() {
+        for tab in [Tab::Home, Tab::Library, Tab::Settings] {
+            let panes = focus_order(tab, LibraryMode::Artists, true);
+            assert_eq!(
+                panes.last(),
+                Some(&Pane::Queue),
+                "{tab:?} should end at the Up Next pane"
+            );
+            assert!(panes.len() > 1, "{tab:?} should have somewhere to come back to");
+        }
+    }
+
+    #[test]
+    fn a_hidden_side_queue_is_not_focusable() {
+        for tab in [Tab::Home, Tab::Library, Tab::Settings] {
+            assert!(
+                !focus_order(tab, LibraryMode::Artists, false).contains(&Pane::Queue),
+                "{tab:?} must not focus a pane that is not drawn"
+            );
+        }
+    }
+
+    /// The Queue tab draws the queue as its content, so the side pane is
+    /// suppressed there and must not appear twice in the focus order.
+    #[test]
+    fn the_queue_tab_lists_the_queue_once() {
+        let panes = focus_order(Tab::Queue, LibraryMode::Artists, false);
+        assert_eq!(panes, vec![Pane::Queue]);
+    }
+
+    /// Every Library view keeps its own panes and gains the queue at the end.
+    #[test]
+    fn library_views_keep_their_panes_and_gain_the_queue() {
+        let modes = [
+            LibraryMode::Artists,
+            LibraryMode::Albums,
+            LibraryMode::Tracks,
+            LibraryMode::Playlists,
+            LibraryMode::Favorites,
+        ];
+        for mode in modes {
+            let without = focus_order(Tab::Library, mode, false);
+            let with = focus_order(Tab::Library, mode, true);
+            assert_eq!(without, mode.panes().to_vec());
+            assert_eq!(with[..without.len()], without[..]);
+            assert_eq!(with.last(), Some(&Pane::Queue));
+        }
+    }
 
     #[test]
     fn formats_short_and_long_durations() {
