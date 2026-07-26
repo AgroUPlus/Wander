@@ -1,5 +1,9 @@
+pub mod palette;
+
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
+
+pub use palette::Palette;
 
 /// Colors are parsed once at startup into ratatui styles. Everything the UI
 /// draws must come from here so a user theme can restyle the whole app.

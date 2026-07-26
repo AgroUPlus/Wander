@@ -81,6 +81,81 @@ fn track_columns(area: Rect) -> [Rect; 6] {
     ]
 }
 
+/// How many characters each part of the track identity may use.
+#[derive(Debug, PartialEq)]
+struct IdentityWidths {
+    title: usize,
+    artist: usize,
+    album: usize,
+}
+
+/// Separators between the three parts: `"  "` and `" · "`.
+const IDENTITY_SEPARATORS: usize = 2 + 3;
+/// Artist and album stop growing here even when the row is enormous, so the
+/// eye still lands on the title first.
+const ARTIST_CAP: usize = 25;
+const ALBUM_CAP: usize = 25;
+/// Floors kept while clawing back space, so a squeezed row degrades into
+/// something still readable rather than into stray ellipses.
+const MIN_TITLE: usize = 10;
+const MIN_ARTIST: usize = 8;
+const MIN_ALBUM: usize = 6;
+
+/// Divide the identity column between title, artist and album.
+///
+/// The title gets whatever the others do not need, rather than a fixed share:
+/// a short artist and album should leave the title the rest of the row, and the
+/// old half-the-width rule cropped titles with the space sitting empty beside
+/// them. When it genuinely does not fit, space is taken back from the album
+/// first and the title last, since the title is what identifies the track.
+fn identity_widths(
+    available: usize,
+    title: usize,
+    artist: usize,
+    album: usize,
+    stars: usize,
+) -> IdentityWidths {
+    // Stars sit after the album with their own two-space gap.
+    let overhead = IDENTITY_SEPARATORS + if stars > 0 { stars + 2 } else { 0 };
+    let content = available.saturating_sub(overhead);
+
+    let mut widths = IdentityWidths {
+        title,
+        artist: artist.min(ARTIST_CAP),
+        album: album.min(ALBUM_CAP),
+    };
+
+    let wanted = widths.title + widths.artist + widths.album;
+    if wanted <= content {
+        return widths;
+    }
+
+    // Shrink towards the floors, least important first.
+    let mut excess = wanted - content;
+    let mut shrink = |field: &mut usize, floor: usize| {
+        let give = (*field).saturating_sub(floor).min(excess);
+        *field -= give;
+        excess -= give;
+    };
+    shrink(&mut widths.album, MIN_ALBUM);
+    shrink(&mut widths.artist, MIN_ARTIST);
+    shrink(&mut widths.title, MIN_TITLE);
+
+    if excess == 0 {
+        return widths;
+    }
+
+    // Narrower than every floor combined: hand out what there is in priority
+    // order and let the tail drop off entirely.
+    let mut left = content;
+    for field in [&mut widths.title, &mut widths.artist, &mut widths.album] {
+        let take = (*field).min(left);
+        *field = take;
+        left -= take;
+    }
+    widths
+}
+
 /// Columns of the seek row: gutter, elapsed, slider, total.
 fn seek_columns(area: Rect) -> [Rect; 4] {
     let end = slider_end(area);
@@ -125,12 +200,17 @@ fn draw_track_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits:
             frame.render_widget(Paragraph::new(line), columns[1]);
         }
         (None, Some(song)) => {
-            let title = truncate(
-                &song.title,
-                (columns[1].width as usize).saturating_sub(3) / 2,
+            let stars = app.rating_stars(song);
+            let widths = identity_widths(
+                columns[1].width as usize,
+                song.title.chars().count(),
+                song.artist_or_unknown().chars().count(),
+                song.album_or_unknown().chars().count(),
+                stars.chars().count(),
             );
-            let artist = truncate(song.artist_or_unknown(), 25);
-            let album = truncate(song.album_or_unknown(), 25);
+            let title = truncate(&song.title, widths.title);
+            let artist = truncate(song.artist_or_unknown(), widths.artist);
+            let album = truncate(song.album_or_unknown(), widths.album);
 
             let artist_rect = Rect {
                 x: columns[1].x + title.chars().count() as u16 + 2,
@@ -156,7 +236,6 @@ fn draw_track_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits:
                 Span::styled(album, theme.dim()),
             ];
             // Only shown once rated, so an unrated library stays uncluttered.
-            let stars = app.rating_stars(song);
             if !stars.is_empty() {
                 spans.push(Span::styled("  ", theme.dim()));
                 spans.push(Span::styled(stars, theme.title()));
@@ -295,6 +374,70 @@ fn draw_seek_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bug this replaced: the title was given half the column no matter
+    /// what, so it was cropped with the rest of the row sitting empty.
+    #[test]
+    fn a_short_artist_and_album_leave_the_whole_row_to_the_title() {
+        let title = 60;
+        let widths = identity_widths(100, title, 3, 2, 0);
+        assert_eq!(
+            widths.title, title,
+            "the title should not be cropped at all"
+        );
+        assert_eq!(widths.artist, 3);
+        assert_eq!(widths.album, 2);
+    }
+
+    #[test]
+    fn nothing_is_truncated_when_everything_fits() {
+        let widths = identity_widths(120, 30, 12, 14, 0);
+        assert_eq!(
+            widths,
+            IdentityWidths {
+                title: 30,
+                artist: 12,
+                album: 14
+            }
+        );
+    }
+
+    #[test]
+    fn the_parts_always_fit_the_column_at_every_width() {
+        for available in 0usize..200 {
+            for stars in [0usize, 5] {
+                let w = identity_widths(available, 80, 40, 40, stars);
+                let overhead = IDENTITY_SEPARATORS + if stars > 0 { stars + 2 } else { 0 };
+                let used = w.title + w.artist + w.album + overhead;
+                assert!(
+                    used <= available.max(overhead),
+                    "overflowed at {available} (stars {stars}): {w:?} used {used}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_squeezed_row_takes_from_the_album_before_the_title() {
+        // Everything wants more than there is; the title must survive best.
+        let wide = identity_widths(200, 50, 30, 30, 0);
+        let narrow = identity_widths(60, 50, 30, 30, 0);
+        assert!(narrow.album < wide.album, "album should give way first");
+        assert!(narrow.title >= MIN_TITLE, "the title must stay readable");
+        assert!(narrow.title > narrow.album);
+    }
+
+    #[test]
+    fn stars_are_reserved_so_they_are_never_pushed_off_the_row() {
+        let without = identity_widths(80, 60, 20, 20, 0);
+        let with = identity_widths(80, 60, 20, 20, 5);
+        let total = |w: &IdentityWidths| w.title + w.artist + w.album;
+        assert_eq!(
+            total(&without) - total(&with),
+            7,
+            "5 stars plus a 2-space gap"
+        );
+    }
 
     /// The two rows must read as one grid: sliders ending together, readouts
     /// starting together. This is easy to break by nudging one constraint.

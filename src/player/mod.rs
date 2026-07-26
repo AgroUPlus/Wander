@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -28,7 +28,11 @@ const RESTART_THRESHOLD: Duration = Duration::from_secs(3);
 /// Radio mode refills once fewer than this many tracks remain queued.
 const RADIO_LOW_WATER: usize = 5;
 /// How many tracks to add per refill, and how many to score when choosing.
-const RADIO_BATCH: usize = 15;
+///
+/// Deliberately small: a steady trickle of a few tracks keeps the queue looking
+/// like a live stream, where one big batch reads as a playlist that was dumped
+/// in and will eventually run out.
+const RADIO_BATCH: usize = 5;
 const RADIO_CANDIDATES: u32 = 100;
 /// How many neighbouring artists to pull tracks from, and how many each.
 const RADIO_SIMILAR_ARTISTS: u32 = 6;
@@ -37,6 +41,15 @@ const RADIO_ARTIST_TRACKS: u32 = 10;
 const RADIO_RECENT: usize = 20;
 /// How often to check whether a finished track's tail has finished playing.
 const DRAIN_POLL: Duration = Duration::from_millis(100);
+/// How often radio mode checks whether the queue needs topping up.
+///
+/// Track-end is not the only way a queue drains — skipping and removing do it
+/// too — so a periodic check is what makes the stream feel endless rather than
+/// only recovering at the next song boundary.
+const RADIO_POLL: Duration = Duration::from_secs(2);
+/// How long to wait before trying again after a refill found nothing, so a
+/// library with no similarity data is not hammered every [`RADIO_POLL`].
+const RADIO_BACKOFF: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub enum PlayerCommand {
@@ -151,6 +164,10 @@ pub fn spawn(
         net_handle: None,
         transcode_retry: None,
         draining: false,
+        radio_pool: Vec::new(),
+        radio_pool_seed: None,
+        radio_pool_similar: std::collections::HashSet::new(),
+        radio_retry_after: None,
     };
 
     tokio::spawn(task.run(rx));
@@ -184,6 +201,21 @@ struct PlayerTask {
     transcode_retry: Option<String>,
     /// The decoder has finished, but buffered audio is still being played out.
     draining: bool,
+    /// Candidates gathered for radio mode but not yet queued.
+    ///
+    /// Refills are small and frequent, and the pools they draw on are several
+    /// network round-trips wide. Keeping the leftovers means a refill usually
+    /// costs nothing but scoring, and only a change of seed artist — or an
+    /// exhausted pool — goes back to the library.
+    radio_pool: Vec<Song>,
+    /// Artist the cached pool was gathered for.
+    radio_pool_seed: Option<String>,
+    /// Similar-artist names found for that seed, cached alongside the pool so
+    /// refills served from it still score artist affinity the same way.
+    radio_pool_similar: std::collections::HashSet<String>,
+    /// Set when a refill came back empty; suppresses the periodic retry until
+    /// it passes.
+    radio_retry_after: Option<Instant>,
 }
 
 impl PlayerTask {
@@ -194,6 +226,18 @@ impl PlayerTask {
             let drain_tick = async {
                 if self.draining {
                     tokio::time::sleep(DRAIN_POLL).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+
+            // Radio mode watches the queue continuously rather than only at
+            // track boundaries, so skipping or removing tracks can never drain
+            // it faster than it refills.
+            let radio_on = self.queue.lock().unwrap().radio;
+            let radio_tick = async {
+                if radio_on {
+                    tokio::time::sleep(RADIO_POLL).await;
                 } else {
                     std::future::pending::<()>().await;
                 }
@@ -219,6 +263,10 @@ impl PlayerTask {
                     }
                     self.draining = false;
                     self.advance_after_track_end().await;
+                    continue;
+                }
+                _ = radio_tick => {
+                    self.top_up_radio().await;
                     continue;
                 }
             };
@@ -279,6 +327,8 @@ impl PlayerTask {
             PlayerCommand::PlayQueueIndex(index) => {
                 self.queue.lock().unwrap().play_at(index);
                 self.start_current().await;
+                // Jumping near the end leaves little ahead of the new position.
+                self.top_up_radio().await;
             }
             PlayerCommand::Resume { offset } => {
                 let current = self.queue.lock().unwrap().current().cloned();
@@ -322,6 +372,11 @@ impl PlayerTask {
             }
             PlayerCommand::Stop => self.halt().await,
             PlayerCommand::Next => {
+                // Skipping drains the queue just as surely as playing does, so
+                // radio has to be given the chance to keep ahead of it.
+                if self.queue.lock().unwrap().radio {
+                    self.ensure_radio_has_next().await;
+                }
                 let next = self.queue.lock().unwrap().next().cloned();
                 match next {
                     Some(_) => self.start_current().await,
@@ -359,7 +414,7 @@ impl PlayerTask {
                 };
                 // Fill immediately so switching it on has a visible effect.
                 if enabled {
-                    self.top_up_radio().await;
+                    self.force_top_up_radio().await;
                 }
             }
             PlayerCommand::SetStarred { song_id, starred } => {
@@ -384,6 +439,7 @@ impl PlayerTask {
                         self.halt().await;
                     }
                 }
+                self.top_up_radio().await;
             }
             PlayerCommand::Clear => {
                 self.queue.lock().unwrap().clear();
@@ -411,10 +467,13 @@ impl PlayerTask {
             });
         }
 
-        self.top_up_radio().await;
+        self.force_top_up_radio().await;
     }
 
     async fn advance_after_track_end(&mut self) {
+        if self.queue.lock().unwrap().radio {
+            self.ensure_radio_has_next().await;
+        }
         let next = self
             .queue
             .lock()
@@ -427,10 +486,56 @@ impl PlayerTask {
         }
     }
 
+    /// Guarantee radio mode has something to move on to.
+    ///
+    /// This has to run *before* the queue advances: running off the end clears
+    /// the position, and with it the seed that everything is chosen from — so
+    /// recovering afterwards would mean restarting the queue from the top
+    /// instead of continuing the stream.
+    async fn ensure_radio_has_next(&mut self) {
+        {
+            let queue = self.queue.lock().unwrap();
+            // Repeat-one never moves on, so there is nothing to have ready.
+            if queue.remaining() > 0 || queue.repeat == Repeat::One {
+                return;
+            }
+        }
+        self.force_top_up_radio().await;
+        if self.queue.lock().unwrap().remaining() > 0 {
+            return;
+        }
+
+        // Similarity found nothing usable — an obscure seed on a library with
+        // no similarity service, most likely. Reach for the library at large
+        // rather than stopping, which is what radio mode promises.
+        let fallback = self.radio_fallback_songs().await;
+        if fallback.is_empty() {
+            return;
+        }
+        self.queue.lock().unwrap().extend(fallback);
+    }
+
+    /// Top up regardless of any back-off from an earlier empty refill.
+    ///
+    /// For the moments the user is watching — a track ending, radio being
+    /// switched on, the queue actually running out — where one wasted request
+    /// is much cheaper than visibly doing nothing.
+    async fn force_top_up_radio(&mut self) {
+        self.radio_retry_after = None;
+        self.top_up_radio().await;
+    }
+
     /// In radio mode, extend the queue with tracks that suit what is playing.
     ///
     /// Runs before advancing so there is always something to move on to.
     async fn top_up_radio(&mut self) {
+        if let Some(retry_after) = self.radio_retry_after {
+            if Instant::now() < retry_after {
+                return;
+            }
+            self.radio_retry_after = None;
+        }
+
         let (radio, remaining, seed, queued, recent) = {
             let queue = self.queue.lock().unwrap();
             (
@@ -455,7 +560,26 @@ impl PlayerTask {
         };
 
         let mut context = radio::Context::from_recent(&recent);
-        let mut candidates: Vec<Song> = Vec::new();
+
+        // Reuse what the last gather turned up. Refills are small, so most of
+        // them are satisfied entirely from here and cost no network at all.
+        let pool_seed = seed.artist_id.clone().unwrap_or_else(|| seed.id.clone());
+        if self.radio_pool_seed.as_ref() != Some(&pool_seed) {
+            self.radio_pool.clear();
+            self.radio_pool_similar.clear();
+        }
+        self.radio_pool.retain(|song| !queued.contains(&song.id));
+        context
+            .similar_artists
+            .extend(self.radio_pool_similar.iter().cloned());
+        if self.radio_pool.len() >= RADIO_BATCH * 2 {
+            let candidates = std::mem::take(&mut self.radio_pool);
+            self.pick_and_extend(&seed, candidates, &queued, &context);
+            return;
+        }
+
+        let mut candidates: Vec<Song> = std::mem::take(&mut self.radio_pool);
+        self.radio_pool_seed = Some(pool_seed);
 
         // 1. Server-side similarity. Best signal when it exists, but Navidrome
         //    returns nothing without Last.fm, so it can never be the only pool.
@@ -476,6 +600,7 @@ impl PlayerTask {
                 .unwrap_or_default();
             for artist in neighbours.iter().take(RADIO_SIMILAR_ARTISTS as usize) {
                 context.similar_artists.insert(artist.name.to_lowercase());
+                self.radio_pool_similar.insert(artist.name.to_lowercase());
                 candidates.extend(
                     self.library
                         .top_songs(&artist.name, RADIO_ARTIST_TRACKS)
@@ -516,19 +641,41 @@ impl PlayerTask {
             );
         }
 
-        let picked = radio::pick(&seed, candidates, &queued, &context, RADIO_BATCH);
+        self.pick_and_extend(&seed, candidates, &queued, &context);
+    }
+
+    /// Score `candidates`, queue the best few, and keep the rest for next time.
+    fn pick_and_extend(
+        &mut self,
+        seed: &Song,
+        candidates: Vec<Song>,
+        queued: &std::collections::HashSet<String>,
+        context: &radio::Context,
+    ) {
+        let picked = radio::pick(seed, candidates.clone(), queued, context, RADIO_BATCH);
         if picked.is_empty() {
             // Every pool came back empty or fully excluded. Say so, because a
-            // silently unchanged queue is indistinguishable from a bug.
+            // silently unchanged queue is indistinguishable from a bug — and
+            // back off, so the periodic check does not repeat this every
+            // couple of seconds.
+            self.radio_pool.clear();
+            self.radio_retry_after = Some(Instant::now() + RADIO_BACKOFF);
             self.notice("Radio mode found nothing new to add".to_string());
             return;
         }
+
+        // Whatever was not chosen stays around as the next refill's pool.
+        self.radio_pool = radio::leftovers(candidates, &picked, queued);
+
         self.queue.lock().unwrap().extend(picked);
     }
 
-    /// Start a radio stream with no track playing, using whatever the library
-    /// can offer unprompted.
-    async fn seed_radio_from_nothing(&mut self) {
+    /// Whatever the library can offer unprompted, for when similarity has
+    /// nothing to say: starred tracks plus a random draw, shuffled.
+    ///
+    /// Already-queued tracks are excluded, so this can also be used to extend a
+    /// running stream rather than only to start one.
+    async fn radio_fallback_songs(&mut self) -> Vec<Song> {
         let mut candidates = self.library.starred_songs().await.unwrap_or_default();
         candidates.extend(
             self.library
@@ -539,13 +686,20 @@ impl PlayerTask {
 
         // De-duplicate and shuffle, so an unseeded start is not the same tracks
         // in the same order every time.
+        let queued = self.queue.lock().unwrap().ids();
         let mut seen = std::collections::HashSet::new();
-        candidates.retain(|song| seen.insert(song.id.clone()));
+        candidates.retain(|song| !queued.contains(&song.id) && seen.insert(song.id.clone()));
         for i in (1..candidates.len()).rev() {
             candidates.swap(i, rand::random_range(0..=i));
         }
         candidates.truncate(RADIO_BATCH);
+        candidates
+    }
 
+    /// Start a radio stream with no track playing, using whatever the library
+    /// can offer unprompted.
+    async fn seed_radio_from_nothing(&mut self) {
+        let candidates = self.radio_fallback_songs().await;
         if candidates.is_empty() {
             self.notice("Radio mode found no tracks to start from".to_string());
             return;

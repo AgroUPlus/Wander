@@ -40,6 +40,8 @@ pub enum Region {
     CurrentAlbum,
     /// The spectrum panel; clicking it steps to the next drawing style.
     Visualiser,
+    /// The cover art pane; clicking it opens the project's GitHub page.
+    Cover,
     /// A row in a list or table. `index` is the row's position in its list.
     Row {
         pane: Pane,
@@ -98,7 +100,7 @@ pub fn draw(
     hits: &mut Hits,
 ) {
     hits.clear();
-    let theme = app.config.theme.clone();
+    let theme = app.theme.clone();
     let area = frame.area();
 
     // Paint the theme's background once, underneath everything. Without this,
@@ -207,10 +209,14 @@ fn draw_focus(
                     Constraint::Min(MIN_LYRICS_WIDTH),
                 ])
                 .split(middle);
+                hits.push(columns[0], Region::Cover);
                 covers.draw(frame, columns[0], app, theme);
                 lyrics::draw(frame, columns[1], app, theme, hits);
             }
-            None => covers.draw(frame, middle, app, theme),
+            None => {
+                hits.push(middle, Region::Cover);
+                covers.draw(frame, middle, app, theme);
+            }
         }
     } else if show_viz_in_middle {
         // Cover is hidden; visualizer takes the cover room!
@@ -370,6 +376,7 @@ fn draw_body(
 
         let mut next = 0;
         if app.show_cover_pane {
+            hits.push(sections[next], Region::Cover);
             covers.draw(frame, sections[next], app, theme);
             next += 1;
         }

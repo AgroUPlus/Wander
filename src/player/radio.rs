@@ -196,6 +196,20 @@ pub fn pick(
     picked
 }
 
+/// What is left of a candidate pool once a batch has been queued from it.
+///
+/// Kept separate from [`pick`] because refills are small and frequent: the
+/// leftovers become the next refill's pool, so it can usually be served without
+/// touching the network at all. De-duplicates, and drops anything already in the
+/// queue, so the pool cannot grow stale or repetitive as it is reused.
+pub fn leftovers(candidates: Vec<Song>, picked: &[Song], queued: &HashSet<String>) -> Vec<Song> {
+    let mut seen: HashSet<String> = picked.iter().map(|song| song.id.clone()).collect();
+    candidates
+        .into_iter()
+        .filter(|song| !queued.contains(&song.id) && seen.insert(song.id.clone()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +238,26 @@ mod tests {
             genres: Vec::new(),
             moods: Vec::new(),
         }
+    }
+
+    #[test]
+    fn leftovers_drop_what_was_picked_and_what_is_queued() {
+        let candidates = vec![song("a"), song("b"), song("c"), song("d")];
+        let picked = vec![song("a")];
+        let queued: HashSet<String> = ["c".to_string()].into_iter().collect();
+        let rest = leftovers(candidates, &picked, &queued);
+        let ids: Vec<&str> = rest.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["b", "d"]);
+    }
+
+    #[test]
+    fn leftovers_do_not_accumulate_duplicates() {
+        // Pools are unioned from overlapping endpoints and then reused as the
+        // next pool, so without this the same track piles up every refill.
+        let candidates = vec![song("a"), song("b"), song("a"), song("b")];
+        let rest = leftovers(candidates, &[], &HashSet::new());
+        let ids: Vec<&str> = rest.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
     }
 
     fn with_genre(id: &str, genre: &str) -> Song {

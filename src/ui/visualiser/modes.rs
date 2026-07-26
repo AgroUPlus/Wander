@@ -1,265 +1,18 @@
-//! The spectrum panel.
-//!
-//! These are deliberately not bar charts. A row of bars is the most literal way
-//! to draw an FFT and the least interesting to look at, so each mode here reads
-//! the same band levels as something with its own behaviour — a burning bed, a
-//! drifting ribbon, a bloom opening on the beat — and keeps state between frames
-//! so the picture has motion of its own rather than only tracking the audio.
-
-use std::collections::VecDeque;
-
-use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
-use serde::{Deserialize, Deserializer, Serialize};
-
-use super::widgets::gradient;
+use super::*;
 use crate::player::spectrum::Spectrum;
 use crate::theme::Theme;
-
-/// Shading steps, faintest first. Used wherever a cell has an intensity rather
-/// than a height.
-const SHADES: [char; 4] = ['░', '▒', '▓', '█'];
-/// Below this a cell is left blank, so quiet passages breathe instead of
-/// filling the pane with noise.
-const FLOOR: f32 = 0.06;
-/// Terminal cells are roughly twice as tall as they are wide; anything meant to
-/// look round has to compensate.
-const CELL_ASPECT: f32 = 2.0;
-
-/// How the spectrum is drawn. Cycled with `V`, remembered between sessions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum VizMode {
-    /// A drifting ribbon of light, shaped by the spectrum.
-    #[default]
-    Aurora,
-    /// A bed of embers fed from below by the music's energy.
-    Ember,
-    /// Petals opening out of the centre, pushed by onsets.
-    Bloom,
-    /// A spinning supernova galaxy of logarithmic spiral arms and cosmic energy.
-    Vortex,
-    /// Holographic prismatic wave fronts intersecting and shimmering on the beat.
-    Prism,
-    /// A glowing solar eclipse with dynamic coronal flare eruptions.
-    Eclipse,
-    /// Hypnotic 8-fold symmetrical fractal mandala rendered in high-res Braille sub-cells.
-    Kaleidoscope,
-    /// High-density gaseous cosmic cloud with Braille stardust spiral arms.
-    Nebula,
-    /// The raw waveform, drawn with braille for sub-cell resolution.
-    Scope,
-    /// A scrolling spectrogram: time down the pane, colour by level.
-    Waterfall,
-}
-
-impl VizMode {
-    pub const ALL: [VizMode; 10] = [
-        VizMode::Aurora,
-        VizMode::Ember,
-        VizMode::Bloom,
-        VizMode::Vortex,
-        VizMode::Prism,
-        VizMode::Eclipse,
-        VizMode::Kaleidoscope,
-        VizMode::Nebula,
-        VizMode::Scope,
-        VizMode::Waterfall,
-    ];
-
-    pub fn next(self) -> Self {
-        let index = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0);
-        Self::ALL[(index + 1) % Self::ALL.len()]
-    }
-
-    /// Matches the serialised name, so one is always readable as the other.
-    pub fn label(self) -> &'static str {
-        match self {
-            VizMode::Aurora => "aurora",
-            VizMode::Ember => "ember",
-            VizMode::Bloom => "bloom",
-            VizMode::Vortex => "vortex",
-            VizMode::Prism => "prism",
-            VizMode::Eclipse => "eclipse",
-            VizMode::Kaleidoscope => "kaleidoscope",
-            VizMode::Nebula => "nebula",
-            VizMode::Scope => "scope",
-            VizMode::Waterfall => "waterfall",
-        }
-    }
-}
-
-/// Read a saved mode without letting a name we no longer have discard the whole
-/// session state — modes come and go, the queue should not go with them.
-pub fn lenient_mode<'de, D: Deserializer<'de>>(deserializer: D) -> Result<VizMode, D::Error> {
-    let raw = String::deserialize(deserializer)?;
-    Ok(VizMode::ALL
-        .into_iter()
-        .find(|mode| mode.label() == raw)
-        .unwrap_or_default())
-}
-
-/// How many bands a mode wants across `width` columns.
-fn band_count(mode: VizMode, width: u16) -> usize {
-    match mode {
-        // Per-column detail.
-        VizMode::Waterfall
-        | VizMode::Scope
-        | VizMode::Ember
-        | VizMode::Aurora
-        | VizMode::Prism
-        | VizMode::Kaleidoscope
-        | VizMode::Nebula => width.max(1) as usize,
-
-        VizMode::Bloom | VizMode::Vortex | VizMode::Eclipse => {
-            (width / 4).clamp(4, 32) as usize
-        }
-    }
-}
-
-/// Particle in cosmic nebula spiral galaxy mode.
-struct NebulaParticle {
-    angle: f32,
-    radius: f32,
-    speed: f32,
-}
-
-/// Frame-to-frame state the effects need: a fire's heat, a ribbon's history, a
-/// slow phase to drift by, and an onset detector to react to.
-pub struct Visualiser {
-    /// Ember heat field, row-major, `heat_size` shaped.
-    heat: Vec<f32>,
-    heat_size: (u16, u16),
-    /// Aurora's recent shapes, newest first, so the ribbon trails itself.
-    trail: VecDeque<Vec<f32>>,
-    /// Slow drift, so nothing is ever perfectly still.
-    phase: f32,
-    /// Rings thrown out by the bloom, oldest first.
-    ripples: Vec<Ripple>,
-    /// Cosmic particles for nebula mode.
-    nebula_particles: Vec<NebulaParticle>,
-    /// Smoothed loudness, and the pulse an onset leaves behind.
-    energy: f32,
-    pulse: f32,
-    /// xorshift state: cheap jitter without pulling in a dependency.
-    seed: u32,
-}
-
-impl Default for Visualiser {
-    fn default() -> Self {
-        Self {
-            heat: Vec::new(),
-            heat_size: (0, 0),
-            trail: VecDeque::new(),
-            ripples: Vec::new(),
-            nebula_particles: Vec::new(),
-            phase: 0.0,
-            energy: 0.0,
-            pulse: 0.0,
-            seed: 0x2545_f491,
-        }
-    }
-}
-
-/// One expanding ring of the bloom.
-struct Ripple {
-    /// Fraction of the way to the corner of the pane.
-    radius: f32,
-    strength: f32,
-    /// How many lobes its edge has.
-    petals: f32,
-    /// Rotation it was born with, so rings do not line up.
-    spin: f32,
-}
-
-/// Where a frame's energy sits in the spectrum, in `[0, 1]`.
-///
-/// Low for a bass hit, high for a cymbal — used to give the two different
-/// shapes rather than treating every onset the same.
-fn centroid(bars: &[f32]) -> f32 {
-    let total: f32 = bars.iter().sum();
-    if total <= f32::EPSILON || bars.len() < 2 {
-        return 0.0;
-    }
-    let weighted: f32 = bars
-        .iter()
-        .enumerate()
-        .map(|(index, level)| index as f32 * level)
-        .sum();
-    (weighted / total) / (bars.len() - 1) as f32
-}
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::text::{Line, Span};
 
 impl Visualiser {
-    /// Uniform noise in `[0, 1)`.
-    fn noise(&mut self) -> f32 {
-        // xorshift32, which is plenty for sparks and jitter.
-        self.seed ^= self.seed << 13;
-        self.seed ^= self.seed >> 17;
-        self.seed ^= self.seed << 5;
-        (self.seed >> 8) as f32 / (1 << 24) as f32
-    }
-
-    /// Advance the shared clock, and watch for onsets.
-    ///
-    /// Spectral flux — how much louder this frame is than the last — is what
-    /// makes the effects hit on the beat instead of merely following the volume.
-    fn advance(&mut self, bars: &[f32]) {
-        self.phase += 0.06;
-        if self.phase > std::f32::consts::TAU * 64.0 {
-            self.phase -= std::f32::consts::TAU * 64.0;
-        }
-
-        let level = if bars.is_empty() {
-            0.0
-        } else {
-            bars.iter().sum::<f32>() / bars.len() as f32
-        };
-        let flux = (level - self.energy).max(0.0);
-        self.energy += (level - self.energy) * 0.25;
-        // Rises on a transient, falls away over about half a second.
-        self.pulse = (self.pulse * 0.88).max((flux * 6.0).min(1.0));
-    }
-
-    pub fn draw(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        spectrum: &mut Spectrum,
-        mode: VizMode,
-        theme: &Theme,
-    ) {
-        if area.width < 2 || area.height == 0 {
-            return;
-        }
-        spectrum.resize(band_count(mode, area.width));
-        self.advance(spectrum.bars());
-
-        let lines = match mode {
-            VizMode::Aurora => self.aurora(spectrum.bars(), area, theme),
-            VizMode::Ember => self.ember(spectrum.bars(), area, theme),
-            VizMode::Bloom => self.bloom(spectrum.bars(), area, theme),
-            VizMode::Vortex => self.vortex(spectrum.bars(), area, theme),
-            VizMode::Prism => self.prism(spectrum.bars(), area, theme),
-            VizMode::Eclipse => self.eclipse(spectrum.bars(), area, theme),
-            VizMode::Kaleidoscope => self.kaleidoscope(spectrum.bars(), area, theme),
-            VizMode::Nebula => self.nebula(spectrum.bars(), area, theme),
-            VizMode::Scope => scope(spectrum, area, theme),
-            VizMode::Waterfall => waterfall(spectrum, area, theme),
-        };
-
-        frame.render_widget(Paragraph::new(lines), area);
-    }
-
     /// A ribbon of light whose height follows the spectrum, trailing the shapes
     /// it held a moment ago so movement leaves a wake.
     ///
     /// The band levels are smoothed across neighbours and lifted by a slow
     /// travelling wave, which is what turns a jagged spectrum into something
     /// that flows.
-    fn aurora<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn aurora<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let cols = area.width as usize;
         let rows = area.height as usize;
 
@@ -322,7 +75,7 @@ impl Visualiser {
     /// Nothing here is drawn from the spectrum directly — the audio only stokes
     /// the fire, which is why it keeps moving through a sustained note and dies
     /// down slowly rather than snapping to silence.
-    fn ember<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn ember<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let cols = area.width as usize;
         let rows = area.height as usize;
 
@@ -374,7 +127,7 @@ impl Visualiser {
     /// spectrum is too jagged to survive being sampled that finely. Ripples are
     /// *events* instead — the music decides when one is born and how bright, and
     /// after that the ring has a life of its own.
-    fn bloom<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn bloom<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         // A new ring on each onset, but never so often that they blur together.
         if self.pulse > 0.35 && self.ripples.last().is_none_or(|r| r.radius > 0.28) {
             let brightness = 0.55 + self.pulse * 0.45;
@@ -443,7 +196,7 @@ impl Visualiser {
 
     /// A swirling supernova galaxy: spinning spiral arms of light,
     /// a pulsing core fed by bass, and expanding shockwaves on each beat.
-    fn vortex<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn vortex<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let (cx, cy) = (
             (area.width as f32 - 1.0) / 2.0,
             (area.height as f32 - 1.0) / 2.0,
@@ -499,7 +252,7 @@ impl Visualiser {
 
     /// A holographic prismatic wave interference field: intersecting energy
     /// fronts that twist and shimmer according to frequency harmonics.
-    fn prism<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn prism<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let (cx, cy) = (
             (area.width as f32 - 1.0) / 2.0,
             (area.height as f32 - 1.0) / 2.0,
@@ -544,7 +297,7 @@ impl Visualiser {
 
     /// A celestial solar eclipse: a central dark moon silhouette surrounded by a
     /// brilliant glowing solar corona that flares and erupts to audio frequencies.
-    fn eclipse<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn eclipse<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let (cx, cy) = (
             (area.width as f32 - 1.0) / 2.0,
             (area.height as f32 - 1.0) / 2.0,
@@ -602,16 +355,18 @@ impl Visualiser {
     }
 
     /// Hypnotic 8-fold symmetrical fractal mandala rendered in high-res Braille sub-cells.
-    fn kaleidoscope<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn kaleidoscope<'a>(
+        &mut self,
+        bars: &[f32],
+        area: Rect,
+        theme: &Theme,
+    ) -> Vec<Line<'a>> {
         let cols = area.width as usize;
         let rows = area.height as usize;
         let dot_cols = cols * 2;
         let dot_rows = rows * 4;
 
-        let (cx, cy) = (
-            (dot_cols as f32 - 1.0) / 2.0,
-            (dot_rows as f32 - 1.0) / 2.0,
-        );
+        let (cx, cy) = ((dot_cols as f32 - 1.0) / 2.0, (dot_rows as f32 - 1.0) / 2.0);
         let max_r = cx.hypot(cy * CELL_ASPECT).max(1.0);
 
         let lows = bars.len().div_ceil(4).max(1);
@@ -645,7 +400,8 @@ impl Visualiser {
                 }
                 let sym_angle = (angle % sector_angle - sector_angle / 2.0).abs();
 
-                let wave = ((norm_r * k_r - spin).sin() + (sym_angle * k_a + spin * 0.7).cos()) * 0.5;
+                let wave =
+                    ((norm_r * k_r - spin).sin() + (sym_angle * k_a + spin * 0.7).cos()) * 0.5;
 
                 // Pulsing onset shockwave ring
                 let shockwave = if self.pulse > 0.1 {
@@ -697,7 +453,7 @@ impl Visualiser {
     }
 
     /// High-density gaseous cosmic cloud with Braille stardust spiral arms.
-    fn nebula<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+    pub(crate) fn nebula<'a>(&mut self, bars: &[f32], area: Rect, theme: &Theme) -> Vec<Line<'a>> {
         let cols = area.width as usize;
         let rows = area.height as usize;
         let dot_cols = cols * 2;
@@ -708,7 +464,8 @@ impl Visualiser {
         while self.nebula_particles.len() < target_particles {
             let arm = (self.noise() * 3.0) as usize;
             let radius = 2.0 + self.noise().powf(1.5) * (dot_cols as f32 * 0.45);
-            let angle = (arm as f32 * std::f32::consts::TAU / 3.0) + radius * 0.08 + self.noise() * 0.4;
+            let angle =
+                (arm as f32 * std::f32::consts::TAU / 3.0) + radius * 0.08 + self.noise() * 0.4;
             let speed = 0.012 + (1.0 / (radius + 2.0).sqrt()) * 0.06;
             self.nebula_particles.push(NebulaParticle {
                 angle,
@@ -781,7 +538,8 @@ impl Visualiser {
 /// One cell of an intensity field: a shade glyph coloured along the theme's
 /// visualiser gradient. Shared by every mode so they all respond to a theme
 /// change the same way.
-fn cell<'a>(intensity: f32, theme: &Theme) -> Span<'a> {
+
+pub(crate) fn cell<'a>(intensity: f32, theme: &Theme) -> Span<'a> {
     let intensity = intensity.clamp(0.0, 1.0);
     if intensity < FLOOR {
         return Span::raw(" ");
@@ -797,7 +555,7 @@ fn cell<'a>(intensity: f32, theme: &Theme) -> Span<'a> {
 }
 
 /// Colour at a given intensity, along the theme's low → high gradient.
-fn shade(intensity: f32, theme: &Theme) -> Color {
+pub(crate) fn shade(intensity: f32, theme: &Theme) -> Color {
     gradient(
         theme.viz_low.0,
         theme.viz_high.0,
@@ -809,7 +567,7 @@ fn shade(intensity: f32, theme: &Theme) -> Color {
 const BRAILLE: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
 /// The raw waveform as a continuous braille trace.
-fn scope<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+pub(crate) fn scope<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let cols = area.width as usize;
     let rows = area.height as usize;
     // Two dots per cell across, four down.
@@ -865,7 +623,7 @@ fn scope<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>> {
 }
 
 /// A spectrogram scrolling downward: the newest frame on top.
-fn waterfall<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>> {
+pub(crate) fn waterfall<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>> {
     let cols = area.width as usize;
     let rows = area.height as usize;
 
@@ -879,184 +637,4 @@ fn waterfall<'a>(spectrum: &Spectrum, area: Rect, theme: &Theme) -> Vec<Line<'a>
             Line::from(spans)
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ratatui::Terminal;
-    use ratatui::backend::TestBackend;
-
-    fn theme() -> Theme {
-        Theme::default()
-    }
-
-    #[test]
-    fn cycling_modes_returns_to_the_start() {
-        let mut mode = VizMode::default();
-        let mut seen = vec![mode];
-        for _ in 1..VizMode::ALL.len() {
-            mode = mode.next();
-            assert!(!seen.contains(&mode), "{mode:?} repeated early");
-            seen.push(mode);
-        }
-        assert_eq!(mode.next(), VizMode::default(), "should wrap");
-    }
-
-    #[test]
-    fn labels_match_the_serialised_names() {
-        for mode in VizMode::ALL {
-            let json = serde_json::to_string(&mode).expect("serialise");
-            assert_eq!(json, format!("\"{}\"", mode.label()));
-        }
-    }
-
-    /// A mode that no longer exists must not take the saved queue down with it.
-    #[test]
-    fn a_retired_mode_name_falls_back_to_the_default() {
-        #[derive(serde::Deserialize)]
-        struct Saved {
-            #[serde(deserialize_with = "lenient_mode")]
-            viz_mode: VizMode,
-            other: u32,
-        }
-        let saved: Saved =
-            serde_json::from_str(r#"{"viz_mode":"peaks","other":7}"#).expect("must still load");
-        assert_eq!(saved.viz_mode, VizMode::default());
-        assert_eq!(saved.other, 7, "the rest of the state survives");
-
-        let kept: Saved =
-            serde_json::from_str(r#"{"viz_mode":"ember","other":1}"#).expect("known mode");
-        assert_eq!(kept.viz_mode, VizMode::Ember);
-    }
-
-    #[test]
-    fn every_mode_draws_something_at_every_plausible_size() {
-        for mode in VizMode::ALL {
-            for (w, h) in [(7u16, 3u16), (40, 8), (120, 12), (3, 40)] {
-                let (mut producer, mut spectrum) = spectrum_with_audio();
-                let mut visualiser = Visualiser::default();
-                let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test backend");
-                // Several frames, as the app does: the first tells the spectrum
-                // how many bands the pane wants, and the effects need a moment
-                // to develop.
-                for _ in 0..6 {
-                    terminal
-                        .draw(|frame| {
-                            visualiser.draw(frame, frame.area(), &mut spectrum, mode, &theme());
-                        })
-                        .expect("draw must not fail");
-                    push_tone(&mut producer);
-                    spectrum.update();
-                }
-
-                let buffer = terminal.backend().buffer().clone();
-                let drawn: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
-                assert!(
-                    drawn.chars().any(|c| c != ' '),
-                    "{mode:?} drew nothing at {w}x{h}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_mode_survives_a_pane_of_any_shape() {
-        // Panes get this small mid-tween, and a panic there takes the app down.
-        for mode in VizMode::ALL {
-            for (w, h) in [(2u16, 1u16), (3, 1), (2, 2), (1, 1), (200, 1), (2, 60)] {
-                let (_producer, mut spectrum) = spectrum_with_audio();
-                let mut visualiser = Visualiser::default();
-                let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test backend");
-                for _ in 0..3 {
-                    terminal
-                        .draw(|frame| {
-                            visualiser.draw(frame, frame.area(), &mut spectrum, mode, &theme());
-                        })
-                        .expect("draw must not fail");
-                }
-            }
-        }
-    }
-
-    /// The effects keep their own state, so a resize must not read a field
-    /// sized for the previous pane.
-    #[test]
-    fn effects_survive_being_resized_between_frames() {
-        for mode in VizMode::ALL {
-            let (mut producer, mut spectrum) = spectrum_with_audio();
-            let mut visualiser = Visualiser::default();
-            for (w, h) in [(40u16, 8u16), (12, 3), (80, 12), (5, 2), (60, 8)] {
-                let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test backend");
-                terminal
-                    .draw(|frame| {
-                        visualiser.draw(frame, frame.area(), &mut spectrum, mode, &theme());
-                    })
-                    .expect("draw must not fail");
-                push_tone(&mut producer);
-                spectrum.update();
-            }
-        }
-    }
-
-    /// Silence should settle, not freeze mid-frame.
-    #[test]
-    fn the_picture_dies_down_when_the_music_stops() {
-        let (_producer, mut spectrum) = spectrum_with_audio();
-        let mut visualiser = Visualiser::default();
-        let mut terminal = Terminal::new(TestBackend::new(40, 8)).expect("test backend");
-
-        let mut ink = |visualiser: &mut Visualiser, spectrum: &mut Spectrum| {
-            terminal
-                .draw(|frame| {
-                    visualiser.draw(frame, frame.area(), spectrum, VizMode::Ember, &theme());
-                })
-                .expect("draw");
-            terminal
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .filter(|cell| cell.symbol() != " ")
-                .count()
-        };
-
-        let mut lit = 0;
-        for _ in 0..8 {
-            lit = ink(&mut visualiser, &mut spectrum);
-        }
-        assert!(lit > 0, "the fire should catch while audio plays");
-
-        // No new audio from here on.
-        let mut settled = lit;
-        for _ in 0..80 {
-            spectrum.update();
-            settled = ink(&mut visualiser, &mut spectrum);
-        }
-        assert!(
-            settled < lit / 2,
-            "embers should die down in silence ({lit} -> {settled})"
-        );
-    }
-
-    /// A spectrum with real audio behind it, plus the producer needed to keep
-    /// feeding it.
-    fn spectrum_with_audio() -> (rtrb::Producer<f32>, Spectrum) {
-        let (mut producer, consumer) = rtrb::RingBuffer::<f32>::new(8192);
-        push_tone(&mut producer);
-        let mut spectrum = Spectrum::new(consumer, 48_000, 32);
-        spectrum.update();
-        (producer, spectrum)
-    }
-
-    /// A bass note and a treble note, so low and high bands both light up.
-    fn push_tone(producer: &mut rtrb::Producer<f32>) {
-        for i in 0..4096 {
-            let t = i as f32 / 48_000.0;
-            let _ = producer.push(
-                0.6 * (std::f32::consts::TAU * 220.0 * t).sin()
-                    + 0.3 * (std::f32::consts::TAU * 3000.0 * t).sin(),
-            );
-        }
-    }
 }

@@ -6,7 +6,7 @@
 //! that would hand Discord full access to the library.
 
 use anyhow::Result;
-use discord_rich_presence::activity::{Activity, ActivityType, Assets, Timestamps};
+use discord_rich_presence::activity::{Activity, ActivityType, Assets, Button, Timestamps};
 use discord_rich_presence::{DiscordIpc, DiscordIpcClient};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,6 +25,10 @@ const RECONNECT_MAX: Duration = Duration::from_secs(300);
 /// art. Missing art simply shows no image, which is harmless.
 const FALLBACK_IMAGE: &str = "wander";
 const BUILTIN_CLIENT_ID: &str = "1530944096141705297";
+/// Where the presence's links point: the album art itself (`large_url`) and
+/// the button under it.
+const REPO_URL: &str = "https://github.com/Kolbxyz/Wander";
+const REPO_BUTTON_LABEL: &str = "Wander on GitHub";
 // Fallback working application IDs if user configured client_id fails
 const FALLBACK_CLIENT_IDS: [&str; 3] = [
     "1530944096141705297",
@@ -175,7 +179,10 @@ impl Presence {
             let image = self.art_url(&song).await;
             let state = format!("{} · {}", song.artist_or_unknown(), song.album_or_unknown());
 
-            let mut assets = Assets::new().large_text(song.album_or_unknown());
+            // `large_url` makes the album art itself clickable.
+            let mut assets = Assets::new()
+                .large_text(song.album_or_unknown())
+                .large_url(REPO_URL);
             assets = match image.as_deref() {
                 Some(url) => assets.large_image(url),
                 None => assets.large_image(FALLBACK_IMAGE),
@@ -185,7 +192,8 @@ impl Presence {
                 .activity_type(ActivityType::Listening)
                 .details(song.title.as_str())
                 .state(state.as_str())
-                .assets(assets);
+                .assets(assets)
+                .buttons(vec![Button::new(REPO_BUTTON_LABEL, REPO_URL)]);
 
             // Timestamps let Discord render a live countdown. Omitted while
             // paused, otherwise the bar keeps moving with no audio.
