@@ -360,7 +360,7 @@ fn rgb(hex: u32) -> ThemeColor {
 }
 
 /// Wrapper so themes can be written as `"#7aa2f7"` or a named color in TOML.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemeColor(pub Color);
 
 impl Serialize for ThemeColor {
@@ -393,31 +393,52 @@ pub fn parse_color(text: &str) -> Option<Color> {
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
         return Some(Color::Rgb(r, g, b));
     }
+
     let lower = text.to_ascii_lowercase();
-    let stripped = lower.strip_prefix("color").unwrap_or(&lower);
-    if let Ok(idx) = stripped.parse::<u8>() {
+
+    let cleaned = lower
+        .strip_prefix("indexed")
+        .or_else(|| lower.strip_prefix("color"))
+        .or_else(|| lower.strip_prefix("ansi"))
+        .unwrap_or(&lower);
+
+    let trimmed = cleaned.trim().trim_matches(|c| c == '(' || c == ')' || c == ':' || c == ',');
+    if let Ok(idx) = trimmed.trim().parse::<u8>() {
         return Some(Color::Indexed(idx));
     }
-    Some(match lower.as_str() {
-        "reset" | "default" => Color::Reset,
-        "black" => Color::Black,
-        "red" => Color::Red,
-        "green" => Color::Green,
-        "yellow" => Color::Yellow,
-        "blue" => Color::Blue,
-        "magenta" => Color::Magenta,
-        "cyan" => Color::Cyan,
-        "gray" | "grey" => Color::Gray,
-        "darkgray" | "darkgrey" => Color::DarkGray,
-        "lightred" => Color::LightRed,
-        "lightgreen" => Color::LightGreen,
-        "lightyellow" => Color::LightYellow,
-        "lightblue" => Color::LightBlue,
-        "lightmagenta" => Color::LightMagenta,
-        "lightcyan" => Color::LightCyan,
-        "white" => Color::White,
-        other => Color::Indexed(other.parse().ok()?),
-    })
+
+    if lower.starts_with("rgb(") && lower.ends_with(')') {
+        let inner = &lower[4..lower.len() - 1];
+        let parts: Vec<&str> = inner.split(',').collect();
+        if parts.len() == 3 {
+            let r = parts[0].trim().parse::<u8>().ok()?;
+            let g = parts[1].trim().parse::<u8>().ok()?;
+            let b = parts[2].trim().parse::<u8>().ok()?;
+            return Some(Color::Rgb(r, g, b));
+        }
+    }
+
+    let normalized = lower.replace(['-', '_', ' '], "");
+    match normalized.as_str() {
+        "reset" | "default" => Some(Color::Reset),
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "darkgrey" => Some(Color::DarkGray),
+        "lightred" => Some(Color::LightRed),
+        "lightgreen" => Some(Color::LightGreen),
+        "lightyellow" => Some(Color::LightYellow),
+        "lightblue" => Some(Color::LightBlue),
+        "lightmagenta" => Some(Color::LightMagenta),
+        "lightcyan" => Some(Color::LightCyan),
+        "white" => Some(Color::White),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -435,6 +456,10 @@ mod tests {
         assert_eq!(parse_color("42"), Some(Color::Indexed(42)));
         assert_eq!(parse_color("color0"), Some(Color::Indexed(0)));
         assert_eq!(parse_color("color15"), Some(Color::Indexed(15)));
+        assert_eq!(parse_color("indexed(6)"), Some(Color::Indexed(6)));
+        assert_eq!(parse_color("indexed( 6 )"), Some(Color::Indexed(6)));
+        assert_eq!(parse_color("indexed 6"), Some(Color::Indexed(6)));
+        assert_eq!(parse_color("ansi(6)"), Some(Color::Indexed(6)));
         assert_eq!(parse_color("default"), Some(Color::Reset));
     }
 
@@ -443,6 +468,18 @@ mod tests {
         let theme = Theme::preset("Terminal (ANSI 16)");
         assert_eq!(theme.background.0, Color::Reset);
         assert_eq!(theme.accent.0, Color::Indexed(6));
+    }
+
+    #[test]
+    fn all_presets_round_trip_through_toml() {
+        for preset_name in Theme::PRESET_NAMES {
+            let original = Theme::preset(preset_name);
+            let serialized = toml::to_string(&original).unwrap();
+            let deserialized: Theme = toml::from_str(&serialized)
+                .unwrap_or_else(|e| panic!("failed to deserialize preset '{preset_name}': {e}"));
+            assert_eq!(original.accent, deserialized.accent);
+            assert_eq!(original.background, deserialized.background);
+        }
     }
 
     #[test]
