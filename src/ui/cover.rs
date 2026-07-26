@@ -178,8 +178,20 @@ impl CoverRenderer {
             app.cover_dirty = false;
             match app.cover_bytes.as_deref() {
                 Some(bytes) => self.rebuild(bytes),
+                // Dropping the protocol stops us drawing, but the previous
+                // picture is already on the terminal's own canvas: a track with
+                // no art would otherwise keep showing the last one's.
                 None => self.protocol = None,
             }
+        }
+
+        // A popup is about to be drawn over this pane. Emitting the image anyway
+        // means the graphics layer and the popup's text fight over the same
+        // cells, and the leftovers are what survives the popup closing.
+        // The empty frame stays, so the layout does not jump; the picture comes
+        // back the moment the popup is dismissed.
+        if app.overlay.is_some() || app.show_help {
+            return;
         }
 
         match self.protocol.as_mut() {

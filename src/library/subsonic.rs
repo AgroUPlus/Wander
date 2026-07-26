@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use super::{Capabilities, Library, Source};
 use crate::subsonic::SubsonicClient;
-use crate::subsonic::lyrics::Lyrics;
+use crate::subsonic::lyrics::LyricSet;
 use crate::subsonic::models::{
     Album, AlbumInfo, Artist, Genre, Playlist, SearchResult3, Share, Song,
 };
@@ -91,7 +91,7 @@ impl Library for SubsonicLibrary {
     async fn search(&self, query: &str, count: u32) -> Result<SearchResult3> {
         self.client.search(query, count).await
     }
-    async fn lyrics(&self, song_id: &str) -> Result<Lyrics> {
+    async fn lyrics(&self, song_id: &str) -> Result<LyricSet> {
         self.client.lyrics(song_id).await
     }
     async fn cover_art(&self, cover_id: &str, size: u32) -> Result<Vec<u8>> {

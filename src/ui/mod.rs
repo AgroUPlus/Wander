@@ -20,11 +20,6 @@ use ratatui::widgets::{Block, Paragraph};
 use crate::app::{App, Pane, Tab};
 use cover::CoverRenderer;
 
-/// Height of the spectrum panel.
-///
-/// Fixed rather than configurable: it is a decoration, and a knob for it was
-/// one more setting to explain for no real gain.
-const VISUALISER_HEIGHT: u16 = 8;
 /// Narrowest a lyrics column may be before it stops being worth showing.
 const MIN_LYRICS_WIDTH: u16 = 24;
 /// And the artwork's own floor, so neither pane collapses.
@@ -43,6 +38,8 @@ pub enum Region {
     Volume,
     CurrentArtist,
     CurrentAlbum,
+    /// The spectrum panel; clicking it steps to the next drawing style.
+    Visualiser,
     /// A row in a list or table. `index` is the row's position in its list.
     Row {
         pane: Pane,
@@ -91,11 +88,13 @@ impl Hits {
 }
 
 /// Draw one frame. Widgets read from `App` and never perform I/O.
+#[allow(clippy::too_many_arguments)]
 pub fn draw(
     frame: &mut Frame,
     app: &mut App,
     covers: &mut CoverRenderer,
     spectrum: &mut crate::player::spectrum::Spectrum,
+    viz: &mut visualiser::Visualiser,
     hits: &mut Hits,
 ) {
     hits.clear();
@@ -123,10 +122,10 @@ pub fn draw(
             Constraint::Length(1),
         ])
         .split(area);
-        draw_focus(frame, rows[0], app, covers, spectrum, &theme, hits);
+        draw_focus(frame, rows[0], app, covers, spectrum, viz, &theme, hits);
         player_bar::draw(frame, rows[1], app, &theme, hits);
         frame.render_widget(
-            Paragraph::new("y lyrics  •  Q queue  •  v visualiser  •  F or Esc to leave")
+            Paragraph::new("c cover  •  y lyrics  •  Q queue  •  v visualiser  •  F or Esc to leave")
                 .style(theme.dim())
                 .centered(),
             rows[2],
@@ -138,7 +137,7 @@ pub fn draw(
     }
 
     tabs::draw(frame, rows[0], app, &theme, hits);
-    draw_body(frame, rows[1], app, covers, spectrum, &theme, hits);
+    draw_body(frame, rows[1], app, covers, spectrum, viz, &theme, hits);
     player_bar::draw(frame, rows[2], app, &theme, hits);
     draw_status(frame, rows[3], app, &theme);
 
@@ -152,6 +151,7 @@ pub fn draw(
 }
 
 /// Focus mode: cover on the left, lyrics on the right, visualiser beneath.
+/// If cover is hidden, visualiser takes the cover room.
 ///
 /// Reuses the ordinary pane renderers rather than introducing a second layout
 /// path, so anything fixed in one is fixed in both.
@@ -162,15 +162,19 @@ fn draw_focus(
     app: &mut App,
     covers: &mut CoverRenderer,
     spectrum: &mut crate::player::spectrum::Spectrum,
+    viz: &mut visualiser::Visualiser,
     theme: &crate::theme::Theme,
     hits: &mut Hits,
 ) {
-    let (_, queue_percent) = app.tween_panes();
-    let show_viz = app.show_visualiser && area.height > VISUALISER_HEIGHT + 8;
+    let (_, queue_percent, viz_height) = app.tween_panes();
+    let show_viz_bottom = app.show_cover_pane
+        && app.show_visualiser
+        && area.height > viz_height + 8;
+    let show_viz_in_middle = !app.show_cover_pane && app.show_visualiser;
 
     let mut constraints = vec![Constraint::Length(3), Constraint::Min(5)];
-    if show_viz {
-        constraints.push(Constraint::Length(VISUALISER_HEIGHT));
+    if show_viz_bottom {
+        constraints.push(Constraint::Length(viz_height));
     }
     let rows = Layout::vertical(constraints).split(area);
 
@@ -187,31 +191,57 @@ fn draw_focus(
         (rows[1], None)
     };
 
-    // Lyrics have their own toggle here (`y` / `L`); focus mode is a reading
-    // view, so they are on by default.
-    let cover_width = focus_cover_width(
-        middle.width,
-        covers.width_for_height(middle.height),
-        app.show_focus_lyrics,
-    );
-    match cover_width {
-        Some(cover_width) => {
+    if app.show_cover_pane {
+        // Lyrics have their own toggle here (`y` / `L`); focus mode is a reading
+        // view, so they are on by default.
+        let cover_width = focus_cover_width(
+            middle.width,
+            covers.width_for_height(middle.height),
+            app.show_focus_lyrics,
+        );
+        match cover_width {
+            Some(cover_width) => {
+                let columns = Layout::horizontal([
+                    Constraint::Length(cover_width),
+                    Constraint::Min(MIN_LYRICS_WIDTH),
+                ])
+                .split(middle);
+                covers.draw(frame, columns[0], app, theme);
+                lyrics::draw(frame, columns[1], app, theme, hits);
+            }
+            None => covers.draw(frame, middle, app, theme),
+        }
+    } else if show_viz_in_middle {
+        // Cover is hidden; visualizer takes the cover room!
+        if app.show_focus_lyrics && middle.width >= MIN_LYRICS_WIDTH + MIN_COVER_WIDTH {
+            let viz_width = focus_cover_width(
+                middle.width,
+                covers.width_for_height(middle.height),
+                true,
+            )
+            .unwrap_or(middle.width / 2);
             let columns = Layout::horizontal([
-                Constraint::Length(cover_width),
+                Constraint::Length(viz_width),
                 Constraint::Min(MIN_LYRICS_WIDTH),
             ])
             .split(middle);
-            covers.draw(frame, columns[0], app, theme);
+            hits.push(columns[0], Region::Visualiser);
+            viz.draw(frame, columns[0], spectrum, app.viz_mode, theme);
             lyrics::draw(frame, columns[1], app, theme, hits);
+        } else {
+            hits.push(middle, Region::Visualiser);
+            viz.draw(frame, middle, spectrum, app.viz_mode, theme);
         }
-        None => covers.draw(frame, middle, app, theme),
+    } else if app.show_focus_lyrics {
+        lyrics::draw(frame, middle, app, theme, hits);
     }
 
     if let Some(queue_area) = queue_area {
         queue::draw(frame, queue_area, app, theme, hits, Pane::Queue, false);
     }
-    if show_viz {
-        visualiser::draw(frame, rows[2], spectrum, theme);
+    if show_viz_bottom {
+        hits.push(rows[2], Region::Visualiser);
+        viz.draw(frame, rows[2], spectrum, app.viz_mode, theme);
     }
 }
 
@@ -271,6 +301,7 @@ fn draw_body(
     app: &mut App,
     covers: &mut CoverRenderer,
     spectrum: &mut crate::player::spectrum::Spectrum,
+    viz: &mut visualiser::Visualiser,
     theme: &crate::theme::Theme,
     hits: &mut Hits,
 ) {
@@ -278,7 +309,7 @@ fn draw_body(
     let side_lyrics = app.show_lyrics_pane;
 
     // Eased sizes, so resizing glides rather than stepping.
-    let (cover_percent, queue_percent) = app.tween_panes();
+    let (cover_percent, queue_percent, viz_height) = app.tween_panes();
 
     let mut constraints = Vec::new();
     constraints.push(Constraint::Min(20));
@@ -316,7 +347,7 @@ fn draw_body(
         // The side column stacks whichever of cover / lyrics / visualiser are
         // enabled. The visualiser takes a fixed height; the rest share what is
         // left, so turning one off simply gives its space to the others.
-        let show_viz = app.show_visualiser && side.height > VISUALISER_HEIGHT + 4;
+        let show_viz = app.show_visualiser && side.height > viz_height + 4;
         let flexible = app.show_cover_pane as u16 + side_lyrics as u16;
 
         let mut constraints = Vec::new();
@@ -324,7 +355,7 @@ fn draw_body(
             constraints.push(Constraint::Ratio(1, flexible.max(1) as u32));
         }
         if show_viz {
-            constraints.push(Constraint::Length(VISUALISER_HEIGHT));
+            constraints.push(Constraint::Length(viz_height));
         }
         let sections = Layout::vertical(constraints).split(side);
 
@@ -338,7 +369,8 @@ fn draw_body(
             next += 1;
         }
         if show_viz {
-            visualiser::draw(frame, sections[next], spectrum, theme);
+            hits.push(sections[next], Region::Visualiser);
+            viz.draw(frame, sections[next], spectrum, app.viz_mode, theme);
         }
     }
     if let Some(queue_area) = queue_area {

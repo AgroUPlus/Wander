@@ -23,6 +23,7 @@ pub struct Config {
     pub glyphs: crate::ui::glyphs::GlyphSet,
     pub discord: DiscordConfig,
     pub local: LocalConfig,
+    pub lyrics: LyricsConfig,
     /// Key overrides, e.g. `"ctrl+p" = "open_palette"`. `"none"` unbinds a key.
     /// Anything not listed keeps its default binding.
     #[serde(default)]
@@ -66,8 +67,42 @@ impl Default for Config {
             glyphs: crate::ui::glyphs::GlyphSet::default(),
             discord: DiscordConfig::default(),
             local: LocalConfig::default(),
+            lyrics: LyricsConfig::default(),
             keys: std::collections::HashMap::new(),
         }
+    }
+}
+
+/// On-demand lyric translation.
+///
+/// Off unless `translate_url` is set, and never automatic: pressing the key
+/// sends the track's lyrics to whatever endpoint is named here, which is the
+/// user's decision to make rather than a default to inherit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LyricsConfig {
+    /// A LibreTranslate-compatible `/translate` endpoint, e.g.
+    /// `http://localhost:5000/translate`. Empty disables translation.
+    pub translate_url: String,
+    /// API key, if the endpoint wants one.
+    pub translate_api_key: String,
+    /// Target language code.
+    pub translate_to: String,
+}
+
+impl Default for LyricsConfig {
+    fn default() -> Self {
+        Self {
+            translate_url: String::new(),
+            translate_api_key: String::new(),
+            translate_to: "en".to_string(),
+        }
+    }
+}
+
+impl LyricsConfig {
+    pub fn translation_enabled(&self) -> bool {
+        !self.translate_url.trim().is_empty()
     }
 }
 

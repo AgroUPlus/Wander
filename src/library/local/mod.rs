@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::{Capabilities, LOCAL_PLAYLIST_PREFIX, Library, Source};
-use crate::subsonic::lyrics::Lyrics;
+use crate::subsonic::lyrics::{LyricSet, Lyrics};
 use crate::subsonic::models::{Album, Artist, Genre, Playlist, SearchResult3, Song};
 use index::{LocalIndex, LocalTrack, hash_str};
 
@@ -327,15 +327,15 @@ impl Library for LocalLibrary {
         })
     }
 
-    async fn lyrics(&self, song_id: &str) -> Result<Lyrics> {
+    async fn lyrics(&self, song_id: &str) -> Result<LyricSet> {
         let Some(track) = self.find(song_id) else {
-            return Ok(Lyrics::default());
+            return Ok(LyricSet::default());
         };
-        Ok(
-            tokio::task::spawn_blocking(move || read_lyrics(&track.path))
-                .await
-                .unwrap_or_default(),
-        )
+        // A local file carries one set of words; variants come from translating.
+        let lyrics: Lyrics = tokio::task::spawn_blocking(move || read_lyrics(&track.path))
+            .await
+            .unwrap_or_default();
+        Ok(lyrics.into())
     }
 
     async fn cover_art(&self, cover_id: &str, _size: u32) -> Result<Vec<u8>> {

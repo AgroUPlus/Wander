@@ -17,11 +17,88 @@ pub struct Line {
     pub text: String,
 }
 
-/// Lyrics for a single track, normalised into the form the UI wants.
+/// One rendering of a track's lyrics: a language, a translation, or a
+/// romanisation. A track can be offered several.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Lyrics {
     pub synced: bool,
     pub lines: Vec<Line>,
+    /// Language tag as the source reported it, e.g. `ja` or `ja-Latn`. Shown in
+    /// the pane title so the user can tell which variant they are reading.
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+/// Every variant a track offers, plus which one is being read.
+///
+/// Servers do sometimes carry a romanised or translated version alongside the
+/// original; the old code sorted them, took the first, and threw the rest away.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LyricSet {
+    pub variants: Vec<Lyrics>,
+    #[serde(default)]
+    pub active: usize,
+}
+
+/// Stands in for "no lyrics", so `Deref` can hand out a reference either way.
+static NO_LYRICS: std::sync::LazyLock<Lyrics> = std::sync::LazyLock::new(Lyrics::default);
+
+impl LyricSet {
+    /// The variant currently being read.
+    pub fn active(&self) -> &Lyrics {
+        self.variants.get(self.active).unwrap_or(&NO_LYRICS)
+    }
+
+    /// Move to the next variant, wrapping. Returns its label for the status line.
+    pub fn cycle(&mut self) -> Option<String> {
+        if self.variants.len() < 2 {
+            return None;
+        }
+        self.active = (self.active + 1) % self.variants.len();
+        Some(self.label())
+    }
+
+    /// How to describe the active variant: its language, or its position when
+    /// the source did not say.
+    pub fn label(&self) -> String {
+        match self.active().lang.as_deref() {
+            Some(lang) => lang.to_string(),
+            None => format!("{}/{}", self.active + 1, self.variants.len().max(1)),
+        }
+    }
+
+    /// True when there is more than one thing to read.
+    pub fn has_variants(&self) -> bool {
+        self.variants.len() > 1
+    }
+
+    /// Add a variant and switch to it — how a fresh translation arrives.
+    pub fn push_active(&mut self, lyrics: Lyrics) {
+        self.variants.push(lyrics);
+        self.active = self.variants.len() - 1;
+    }
+}
+
+/// Lets every existing `app.lyrics.synced` / `.lines` read keep working while
+/// the app actually holds a set of variants.
+impl std::ops::Deref for LyricSet {
+    type Target = Lyrics;
+
+    fn deref(&self) -> &Self::Target {
+        self.active()
+    }
+}
+
+impl From<Lyrics> for LyricSet {
+    fn from(lyrics: Lyrics) -> Self {
+        if lyrics.is_empty() {
+            return Self::default();
+        }
+        Self {
+            variants: vec![lyrics],
+            active: 0,
+        }
+    }
 }
 
 impl Lyrics {
@@ -70,34 +147,45 @@ impl Lyrics {
         (position.saturating_sub(start).as_secs_f32() / span).clamp(0.0, 1.0)
     }
 
-    /// Build from the server's structured representation, choosing the synced
-    /// variant when several languages or versions are offered.
-    pub fn from_structured(mut all: Vec<super::models::StructuredLyrics>) -> Self {
-        if all.is_empty() {
-            return Self::default();
-        }
+    /// Build from the server's structured representation.
+    ///
+    /// Every variant is kept — a romanised or translated version is exactly what
+    /// the user might want to read — with synced ones ordered first, since the
+    /// scrolling view needs timings.
+    pub fn from_structured(mut all: Vec<super::models::StructuredLyrics>) -> LyricSet {
         // Prefer synced lyrics; they are what the scrolling view needs.
         all.sort_by_key(|entry| !entry.synced);
-        let chosen = all.remove(0);
 
-        let mut lines: Vec<Line> = chosen
-            .line
+        let variants: Vec<Lyrics> = all
             .into_iter()
-            .map(|line| Line {
-                at: Duration::from_millis(line.start.unwrap_or(0)),
-                text: line.value,
+            .map(|entry| {
+                let mut lines: Vec<Line> = entry
+                    .line
+                    .into_iter()
+                    .map(|line| Line {
+                        at: Duration::from_millis(line.start.unwrap_or(0)),
+                        text: line.value,
+                    })
+                    .collect();
+
+                // Timestamps must be ascending for the binary search to be
+                // valid; the server is not guaranteed to order them.
+                if entry.synced {
+                    lines.sort_by_key(|line| line.at);
+                }
+
+                Lyrics {
+                    synced: entry.synced,
+                    lines,
+                    lang: entry.lang,
+                }
             })
+            .filter(|lyrics| !lyrics.is_empty())
             .collect();
 
-        // Timestamps must be ascending for the binary search to be valid; the
-        // server is not guaranteed to order them.
-        if chosen.synced {
-            lines.sort_by_key(|line| line.at);
-        }
-
-        Self {
-            synced: chosen.synced,
-            lines,
+        LyricSet {
+            variants,
+            active: 0,
         }
     }
 
@@ -144,6 +232,7 @@ impl Lyrics {
             return Self {
                 synced: true,
                 lines,
+                lang: None,
             };
         }
 
@@ -156,6 +245,7 @@ impl Lyrics {
                     text,
                 })
                 .collect(),
+            lang: None,
         }
     }
 }
@@ -182,6 +272,18 @@ fn parse_lrc_timestamp(tag: &str) -> Option<Duration> {
     Some(Duration::from_millis(
         minutes * 60_000 + seconds * 1_000 + millis,
     ))
+}
+
+/// Read a cache entry written by either the current or the previous format.
+///
+/// Entries used to be a bare `Lyrics`; discarding them all on upgrade would mean
+/// re-fetching every track's lyrics — including the negative results that exist
+/// precisely to avoid that.
+fn parse_cached(raw: &str) -> Option<LyricSet> {
+    if let Ok(set) = serde_json::from_str::<LyricSet>(raw) {
+        return Some(set);
+    }
+    serde_json::from_str::<Lyrics>(raw).ok().map(LyricSet::from)
 }
 
 /// On-disk cache, including negative results so a track without lyrics is not
@@ -213,12 +315,12 @@ impl LyricsCache {
         self.dir.join(format!("{safe}.json"))
     }
 
-    pub fn get(&self, song_id: &str) -> Option<Lyrics> {
+    pub fn get(&self, song_id: &str) -> Option<LyricSet> {
         let raw = std::fs::read_to_string(self.path_for(song_id)).ok()?;
-        serde_json::from_str(&raw).ok()
+        parse_cached(&raw)
     }
 
-    pub fn put(&self, song_id: &str, lyrics: &Lyrics) {
+    pub fn put(&self, song_id: &str, lyrics: &LyricSet) {
         // A cache write failure must never disturb playback.
         if let Ok(raw) = serde_json::to_string(lyrics) {
             let _ = std::fs::write(self.path_for(song_id), raw);
@@ -241,6 +343,7 @@ mod tests {
                     text: format!("line {i}"),
                 })
                 .collect(),
+            lang: None,
         }
     }
 
@@ -403,6 +506,108 @@ mod tests {
             }],
         };
         assert!(Lyrics::from_structured(vec![plain, timed]).synced);
+    }
+
+    #[test]
+    fn every_variant_the_server_offers_is_kept() {
+        use crate::subsonic::models::{LyricLine, StructuredLyrics};
+        fn variant(lang: &str, synced: bool) -> StructuredLyrics {
+            StructuredLyrics {
+                synced,
+                lang: Some(lang.into()),
+                display_artist: None,
+                display_title: None,
+                line: vec![LyricLine {
+                    start: Some(0),
+                    value: lang.into(),
+                }],
+            }
+        }
+
+        let set = Lyrics::from_structured(vec![
+            variant("ja", false),
+            variant("ja-Latn", true),
+            variant("en", true),
+        ]);
+        assert_eq!(set.variants.len(), 3, "a romanisation must not be dropped");
+        // Synced first, since that is what the scrolling view needs.
+        assert!(set.active().synced, "should open on a synced variant");
+        assert!(set.has_variants());
+
+        // And cycling reaches all of them, then wraps.
+        let mut seen = vec![set.label()];
+        let mut set = set;
+        for _ in 0..2 {
+            seen.push(set.cycle().expect("more than one variant"));
+        }
+        seen.sort();
+        assert_eq!(seen, ["en", "ja", "ja-Latn"]);
+        set.cycle();
+        assert_eq!(set.active, 0, "cycling should wrap");
+    }
+
+    #[test]
+    fn a_single_variant_has_nothing_to_cycle_to() {
+        let mut set = LyricSet::from(Lyrics::parse_lrc("[00:01.00]only"));
+        assert_eq!(set.variants.len(), 1);
+        assert!(!set.has_variants());
+        assert_eq!(set.cycle(), None);
+        assert_eq!(set.active, 0);
+    }
+
+    #[test]
+    fn empty_lyrics_become_an_empty_set_rather_than_a_blank_variant() {
+        let set = LyricSet::from(Lyrics::default());
+        assert!(set.variants.is_empty());
+        assert!(set.is_empty(), "reads through to the active variant");
+        assert_eq!(Lyrics::from_structured(Vec::new()).variants.len(), 0);
+    }
+
+    #[test]
+    fn a_translation_is_appended_and_becomes_the_active_variant() {
+        let mut set = LyricSet::from(Lyrics::parse_lrc("[00:01.00]hola"));
+        set.push_active(Lyrics {
+            synced: true,
+            lines: vec![Line {
+                at: Duration::from_secs(1),
+                text: "hello".into(),
+            }],
+            lang: Some("en (machine)".into()),
+        });
+        assert_eq!(set.active, 1);
+        assert_eq!(set.active().lines[0].text, "hello");
+        assert_eq!(set.label(), "en (machine)");
+    }
+
+    /// Cache files written before variants existed hold a bare `Lyrics`.
+    #[test]
+    fn cache_entries_in_the_old_format_still_load() {
+        let old = r#"{"synced":true,"lines":[{"at":{"secs":1,"nanos":0},"text":"hi"}]}"#;
+        let set = parse_cached(old).expect("old entries must survive the upgrade");
+        assert_eq!(set.variants.len(), 1);
+        assert_eq!(set.active().lines[0].text, "hi");
+
+        // Including the negative results that stop us re-fetching every play.
+        let empty = parse_cached(r#"{"synced":false,"lines":[]}"#).expect("negative result");
+        assert!(empty.is_empty());
+        assert!(parse_cached("not json").is_none());
+    }
+
+    #[test]
+    fn a_set_written_by_this_version_round_trips() {
+        let mut set = LyricSet::from(Lyrics::parse_lrc("[00:01.00]hola"));
+        set.push_active(Lyrics {
+            synced: true,
+            lines: vec![Line {
+                at: Duration::from_secs(1),
+                text: "hello".into(),
+            }],
+            lang: Some("en (machine)".into()),
+        });
+        let raw = serde_json::to_string(&set).unwrap();
+        let back = parse_cached(&raw).expect("round trip");
+        assert_eq!(back.variants.len(), 2);
+        assert_eq!(back.active, 1, "the chosen variant is remembered");
     }
 
     #[test]

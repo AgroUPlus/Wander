@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod lyrics;
 pub mod models;
+pub mod translate;
 
 use anyhow::{Context, Result, anyhow, bail};
 use md5::{Digest, Md5};
@@ -196,7 +197,7 @@ impl SubsonicClient {
     ///
     /// A server without the extension, or a track with none, yields empty
     /// lyrics rather than an error — the UI treats both the same way.
-    pub async fn lyrics(&self, song_id: &str) -> Result<lyrics::Lyrics> {
+    pub async fn lyrics(&self, song_id: &str) -> Result<lyrics::LyricSet> {
         let response: LyricsResponse = self.get("getLyricsBySongId", &[("id", song_id)]).await?;
         Ok(lyrics::Lyrics::from_structured(
             response.lyrics_list.structured,

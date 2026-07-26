@@ -296,6 +296,19 @@ fn set_password(config: &config::Config) -> Result<()> {
     Ok(())
 }
 
+/// Wipe the screen and force the next draw to repaint every cell.
+///
+/// Deliberately not `Terminal::clear`, which snapshots the cursor with an
+/// `ESC[6n` query and blocks on the terminal's reply: a synchronous round trip
+/// every time a popup opens, and a hang on any terminal that does not answer.
+/// Resizing to the size we already have clears the screen and resets the diff
+/// buffer with no query at all.
+fn repaint(terminal: &mut ratatui::DefaultTerminal) -> Result<()> {
+    let size = terminal.size()?;
+    terminal.resize(ratatui::layout::Rect::new(0, 0, size.width, size.height))?;
+    Ok(())
+}
+
 async fn run(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -307,16 +320,38 @@ async fn run(
     // Rebuilt every frame by `ui::draw`, then used to route the next mouse
     // event, so clicks always match what is currently on screen.
     let mut hits = ui::Hits::default();
+    // The visualiser effects keep state between frames (a fire's heat, a
+    // ribbon's wake), so they outlive any single draw.
+    let mut viz = ui::visualiser::Visualiser::default();
+    let mut shape = app.frame_shape();
 
     loop {
         app.sync_cover();
         // Deferred disk writes land here, at most once a second, so nothing in
         // the input path ever blocks on the filesystem.
         app.flush_state(false);
-        terminal.draw(|frame| ui::draw(frame, app, covers, spectrum, &mut hits))?;
+
+        // Drain the audio tap once per frame, whether or not the visualiser is
+        // on screen: the DSP does not belong on the render path, and a mode that
+        // keeps history needs it to keep ticking.
+        spectrum.update();
+
+        // Anything that changes what covers the album art needs a repaint from
+        // scratch rather than a diff, because the artwork's cells are `skip`ped
+        // by the graphics protocol and so never get overwritten. Without this a
+        // closed popup leaves fragments of itself over the picture.
+        let current = app.frame_shape();
+        if current != shape {
+            shape = current;
+            repaint(terminal)?;
+        }
+
+        terminal.draw(|frame| ui::draw(frame, app, covers, spectrum, &mut viz, &mut hits))?;
 
         if app.should_quit {
             app.flush_state(true);
+            app.player.shared.set_paused(true);
+            app.player.shared.request_flush();
             return Ok(());
         }
 

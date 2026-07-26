@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use super::{Capabilities, Library, LocalLibrary, Source, SubsonicLibrary, is_local_id};
-use crate::subsonic::lyrics::Lyrics;
+use crate::subsonic::lyrics::LyricSet;
 use crate::subsonic::models::{
     Album, AlbumInfo, Artist, Genre, Playlist, SearchResult3, Share, Song,
 };
@@ -190,10 +190,10 @@ impl Library for MergedLibrary {
         Ok(merged)
     }
 
-    async fn lyrics(&self, song_id: &str) -> Result<Lyrics> {
+    async fn lyrics(&self, song_id: &str) -> Result<LyricSet> {
         match self.owner(song_id) {
             Some(b) => b.lyrics(song_id).await,
-            None => Ok(Lyrics::default()),
+            None => Ok(LyricSet::default()),
         }
     }
 

@@ -15,7 +15,7 @@
 
 - **Unified Local & Remote Library**: Mix local MP3/FLAC/Opus files with streamed Navidrome tracks seamlessly in the same queue without playback gaps.
 - **Native Audio Engine**: High-performance audio output via `cpal` and `symphonia` with zero-copy ring buffers. Native `libopus` decoding ensures Opus tracks stream bit-perfect without server transcoding.
-- **Terminal High-Res Visuals**: High-resolution cover art (Kitty, Sixel, iTerm2, and half-block fallbacks) alongside an in-terminal spectrum visualiser.
+- **Terminal High-Res Visuals**: High-resolution cover art (Kitty, Sixel, iTerm2, and half-block fallbacks) alongside an in-terminal visualiser that is deliberately not a bar chart: a drifting **aurora** ribbon, a bed of **embers** stoked by the music, a **bloom** that throws rings out on every onset, an **oscilloscope** trace, and a spectrogram **waterfall** — all levelled against the track's own loudness, so quiet and loud masters read the same.
 - **Synced & Unsynced Lyrics**: Real-time timed lyrics with smooth auto-scrolling, or manual navigation for unsynced track lyrics.
 - **Endless Radio Mode**: Automatically queues contextually relevant tracks using Navidrome similarity API, genre matching, and local listening history.
 - **System & Desktop Integration**: Native MPRIS v2 interface (`playerctl`, desktop shell bars) and Discord Rich Presence with MusicBrainz cover artwork resolution.
@@ -113,6 +113,9 @@ Press `?` or `Ctrl+h` inside Wander at any time to display the live keybinding c
 | `Q` | Toggle Queue Side Pane |
 | `c` | Toggle Cover Art Display |
 | `v` | Toggle Spectrum Visualiser |
+| `V` | Cycle visualiser style (aurora → ember → bloom → scope → waterfall) |
+| `Y` | Cycle lyric variant (other languages / romanisations / translations) |
+| `T` | Translate the current lyrics (needs `[lyrics] translate_url`) |
 | `?` or `Ctrl+h` | Open Live Help / Keymap Cheat Sheet |
 
 > [!TIP]  
@@ -141,6 +144,14 @@ playlist_dir = "~/Music/Playlists"
 [general]
 buffer_seconds = 5.0
 glyphs = "nerd"    # Icon set: "nerd", "unicode", or "ascii"
+
+[lyrics]
+# Optional, off by default. Points at a LibreTranslate-compatible /translate
+# endpoint — self-hosted or otherwise. Pressing `T` sends the current track's
+# lyrics to this endpoint, so leave it empty unless that is what you want.
+translate_url = ""            # e.g. "http://localhost:5000/translate"
+translate_api_key = ""        # if your endpoint requires one
+translate_to = "en"
 
 [discord]
 enabled = false

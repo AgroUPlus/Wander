@@ -4,6 +4,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+use super::glyphs::Icon;
 use super::widgets::gradient;
 use super::{Hits, Region};
 use crate::app::{App, Pane};
@@ -20,12 +21,18 @@ const FALLOFF: f32 = 4.0;
 /// Scroll position is interpolated rather than snapped so the view glides
 /// between lines instead of jumping.
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
+    // Name the variant when there is more than one, so `Y` has visible state.
+    let title = if app.lyrics.has_variants() {
+        format!(" Lyrics · {} ", app.lyrics.label())
+    } else {
+        " Lyrics ".to_string()
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.border(false))
         .style(theme.base())
-        .title(" Lyrics ")
+        .title(title)
         .title_style(theme.title());
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -100,7 +107,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &
             },
         );
 
-        let text = &lyrics.lines[index as usize].text;
+        // An instrumental break has a timestamp but no words. Left blank it
+        // looks like the pane gave up, so it gets a note instead.
+        let text = match lyrics.lines[idx].text.trim() {
+            "" => app.config.glyphs.icon(Icon::LyricGap),
+            text => text,
+        };
         let distance = (index as f32 - app.lyrics_scroll).abs();
         let is_active = active == Some(index as usize);
 
@@ -114,14 +126,14 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &
             let style = Style::default().fg(colour).add_modifier(Modifier::BOLD);
             Line::from(vec![
                 Span::styled("❯ ", theme.title()),
-                Span::styled(text.as_str(), style),
+                Span::styled(text, style),
                 Span::styled(" ❮", theme.title()),
             ])
             .centered()
         } else {
             let t = (distance / FALLOFF).clamp(0.0, 1.0);
             let style = Style::default().fg(gradient(theme.foreground.0, theme.dim.0, t as f64));
-            Line::from(Span::styled(text.as_str(), style)).centered()
+            Line::from(Span::styled(text, style)).centered()
         };
 
         lines.push(line);

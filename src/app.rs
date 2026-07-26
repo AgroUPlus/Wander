@@ -31,6 +31,20 @@ const PANE_EASE: f32 = 0.25;
 /// Below this, a tween has arrived and snaps to its target.
 const PANE_EPSILON: f32 = 0.05;
 
+/// A coarse fingerprint of the current frame's structure, used to decide when
+/// the screen must be repainted from scratch. See [`App::frame_shape`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameShape {
+    overlay: Option<u8>,
+    show_help: bool,
+    focus_mode: bool,
+    panes: [bool; 5],
+    panes_sizes: [u16; 3],
+    cover: u64,
+    tab: u8,
+    viz_mode: crate::ui::visualiser::VizMode,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Home,
@@ -139,7 +153,7 @@ pub enum LoadEvent {
     },
     Lyrics {
         song_id: String,
-        lyrics: Box<crate::subsonic::lyrics::Lyrics>,
+        lyrics: Box<crate::subsonic::lyrics::LyricSet>,
     },
     /// A share link, or the reason the server refused to make one.
     ShareCreated(Result<String, String>),
@@ -236,6 +250,8 @@ pub struct App {
     /// on forced the other.
     pub show_focus_lyrics: bool,
     pub show_visualiser: bool,
+    /// How the spectrum is drawn; cycled with `V`.
+    pub viz_mode: crate::ui::visualiser::VizMode,
 
     pub artists: Vec<Artist>,
     pub artist_sel: Selection,
@@ -290,11 +306,17 @@ pub struct App {
     pub cover_id: Option<String>,
     pub cover_bytes: Option<Vec<u8>>,
     pub cover_dirty: bool,
+    /// Bumped whenever the artwork itself changes, so the frame loop can tell a
+    /// new cover from a redraw of the same one. See [`App::frame_shape`].
+    cover_generation: u64,
     /// A finished encoding waiting to be handed to `CoverRenderer`, which the
     /// app does not own.
     pub cover_resized: Option<Box<ratatui_image::thread::ResizeResponse>>,
 
-    pub lyrics: crate::subsonic::lyrics::Lyrics,
+    pub lyrics: crate::subsonic::lyrics::LyricSet,
+    /// Shared HTTP client for the few requests that do not go through a library
+    /// backend, i.e. lyric translation.
+    http: reqwest::Client,
     pub lyrics_pending: bool,
     /// Eased scroll position, in lyric-line units. Retained between frames so
     /// the view glides rather than snapping.
@@ -329,8 +351,11 @@ pub struct App {
     /// resize glides instead of jumping — see `animated_*` below.
     pub cover_percent: u16,
     pub queue_percent: u16,
+    pub visualiser_height: u16,
     eased_cover: f32,
     eased_queue: f32,
+    eased_visualiser_height: f32,
+    drag_start_viz_height: Option<u16>,
 
     /// Session state is written at most once a second: serialising a long queue
     /// on every keypress is what made held-down resize keys stutter.
@@ -347,12 +372,16 @@ struct SavedAppState {
     volume: f32,
     cover_percent: u16,
     queue_percent: u16,
+    #[serde(default = "default_visualiser_height")]
+    visualiser_height: u16,
     show_queue_pane: bool,
     show_cover_pane: bool,
     show_lyrics_pane: bool,
     #[serde(default = "yes")]
     show_focus_lyrics: bool,
     show_visualiser: bool,
+    #[serde(default, deserialize_with = "crate::ui::visualiser::lenient_mode")]
+    viz_mode: crate::ui::visualiser::VizMode,
     #[serde(default)]
     radio: bool,
     /// Position within the current track, so a restart resumes there.
@@ -369,6 +398,10 @@ fn yes() -> bool {
 
 fn default_library_mode() -> LibraryMode {
     LibraryMode::Artists
+}
+
+fn default_visualiser_height() -> u16 {
+    8
 }
 
 fn queue_cache_path() -> Option<std::path::PathBuf> {
@@ -407,6 +440,7 @@ impl App {
             show_lyrics_pane: false,
             show_focus_lyrics: true,
             show_visualiser: true,
+            viz_mode: crate::ui::visualiser::VizMode::default(),
             artists: Vec::new(),
             artist_sel: Selection::default(),
             artist_albums: Vec::new(),
@@ -440,9 +474,14 @@ impl App {
             cover_id: None,
             cover_bytes: None,
             cover_dirty: false,
+            cover_generation: 0,
             cover_resized: None,
             lyrics: Default::default(),
             lyrics_pending: false,
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(20))
+                .build()
+                .unwrap_or_default(),
             lyrics_scroll: 0.0,
             lyrics_cache: Arc::new(crate::subsonic::lyrics::LyricsCache::new()?),
             lyrics_song: None,
@@ -458,8 +497,11 @@ impl App {
             drag_ratio: 0.0,
             cover_percent: 25,
             queue_percent: 18,
+            visualiser_height: 8,
             eased_cover: 25.0,
             eased_queue: 18.0,
+            eased_visualiser_height: 8.0,
+            drag_start_viz_height: None,
             state_dirty: false,
             last_state_save: Instant::now(),
             last_click: None,
@@ -513,11 +555,13 @@ impl App {
             volume: self.player.shared.volume(),
             cover_percent: self.cover_percent,
             queue_percent: self.queue_percent,
+            visualiser_height: self.visualiser_height,
             show_queue_pane: self.show_queue_pane,
             show_cover_pane: self.show_cover_pane,
             show_lyrics_pane: self.show_lyrics_pane,
             show_focus_lyrics: self.show_focus_lyrics,
             show_visualiser: self.show_visualiser,
+            viz_mode: self.viz_mode,
             radio,
             elapsed_secs: self.player.elapsed().as_secs_f64(),
             library_mode: self.library_mode,
@@ -539,11 +583,13 @@ impl App {
         };
         self.cover_percent = state.cover_percent.clamp(10, 80);
         self.queue_percent = state.queue_percent.clamp(10, 80);
+        self.visualiser_height = state.visualiser_height.clamp(3, 40);
         self.show_queue_pane = state.show_queue_pane;
         self.show_cover_pane = state.show_cover_pane;
         self.show_lyrics_pane = state.show_lyrics_pane;
         self.show_focus_lyrics = state.show_focus_lyrics;
         self.show_visualiser = state.show_visualiser;
+        self.viz_mode = state.viz_mode;
         self.library_mode = state.library_mode;
         self.player.send(PlayerCommand::SetVolume(state.volume));
         let restored = {
@@ -775,6 +821,7 @@ impl App {
                 if self.cover_id.as_deref() == Some(cover_id.as_str()) {
                     self.cover_bytes = Some(bytes);
                     self.cover_dirty = true;
+                    self.cover_generation += 1;
                 }
             }
             LoadEvent::Lyrics { song_id, lyrics } => {
@@ -827,6 +874,78 @@ impl App {
         });
     }
 
+    /// Read the next variant a track offers: another language, a romanisation,
+    /// or a translation fetched earlier.
+    fn cycle_lyric_variant(&mut self) {
+        self.status_message = match self.lyrics.cycle() {
+            Some(label) => {
+                // The new variant may be a different length, so a scroll
+                // position measured in lines no longer means the same thing.
+                self.lyrics_scroll = 0.0;
+                Some(format!("Lyrics: {label}"))
+            }
+            None if self.lyrics.is_empty() => Some("No lyrics to switch between".to_string()),
+            None => Some("This track only has one version of its lyrics".to_string()),
+        };
+    }
+
+    /// Send the current lyrics to the configured translation endpoint.
+    ///
+    /// Deliberately manual: this is the one action in wander that hands the
+    /// user's listening to a third party, so it happens on a keypress and only
+    /// when they have named the endpoint themselves.
+    fn translate_lyrics(&mut self) {
+        if !self.config.lyrics.translation_enabled() {
+            self.status_message =
+                Some("Set [lyrics] translate_url in config.toml to enable translation".to_string());
+            return;
+        }
+        if self.lyrics.is_empty() {
+            self.status_message = Some("No lyrics to translate".to_string());
+            return;
+        }
+
+        let target = self.config.lyrics.translate_to.trim().to_string();
+        // Already fetched once: switch to it rather than asking again.
+        if let Some(index) = self
+            .lyrics
+            .variants
+            .iter()
+            .position(|variant| variant.lang.as_deref() == Some(&format!("{target} (machine)")))
+        {
+            self.lyrics.active = index;
+            self.lyrics_scroll = 0.0;
+            self.status_message = Some(format!("Lyrics: {target} (machine)"));
+            return;
+        }
+
+        let Some(song_id) = self.lyrics_song.clone() else {
+            return;
+        };
+        let source = self.lyrics.active().clone();
+        let mut set = self.lyrics.clone();
+        let config = self.config.lyrics.clone();
+        let http = self.http.clone();
+        let cache = Arc::clone(&self.lyrics_cache);
+
+        self.status_message = Some("Translating…".to_string());
+        self.spawn_load(async move {
+            match crate::subsonic::translate::translate(&http, &config, &source).await {
+                Ok(translated) => {
+                    set.push_active(translated);
+                    // Cached with the rest of the track's variants, so this
+                    // costs one request per track ever rather than per play.
+                    cache.put(&song_id, &set);
+                    Ok(LoadEvent::Lyrics {
+                        song_id,
+                        lyrics: Box::new(set),
+                    })
+                }
+                Err(error) => Ok(LoadEvent::Error(format!("Translation failed: {error}"))),
+            }
+        });
+    }
+
     /// Keep the cover and lyrics in sync with the playing track.
     pub fn sync_cover(&mut self) {
         let current = self.player.status().current;
@@ -837,6 +956,7 @@ impl App {
             self.cover_id = wanted.clone();
             self.cover_bytes = None;
             self.cover_dirty = true;
+            self.cover_generation += 1;
             if let Some(cover_id) = wanted {
                 self.load_cover(cover_id);
             }
@@ -943,6 +1063,8 @@ impl App {
         match action {
             Action::Quit => {
                 self.save_queue_state();
+                self.player.shared.set_paused(true);
+                self.player.shared.request_flush();
                 self.player.send(PlayerCommand::Stop);
                 self.should_quit = true;
             }
@@ -1066,6 +1188,16 @@ impl App {
                 self.save_queue_state();
             }
             Action::ToggleVisualiser => self.show_visualiser = !self.show_visualiser,
+            Action::CycleVisualiser => {
+                self.viz_mode = self.viz_mode.next();
+                // Turning the pane on saves the user wondering why `V` did
+                // nothing when the visualiser is hidden.
+                self.show_visualiser = true;
+                self.status_message = Some(format!("Visualiser: {}", self.viz_mode.label()));
+                self.save_queue_state();
+            }
+            Action::CycleLyricVariant => self.cycle_lyric_variant(),
+            Action::TranslateLyrics => self.translate_lyrics(),
             Action::ToggleRadio => {
                 let enabled = !self.player.queue.lock().unwrap().radio;
                 self.status_message = Some(if enabled {
@@ -1096,6 +1228,8 @@ impl App {
             // the key that was pressed.
             Action::ResizePaneLeft => self.nudge_side_panes(1),
             Action::ResizePaneRight => self.nudge_side_panes(-1),
+            Action::ResizePaneUp => self.nudge_visualiser_height(1),
+            Action::ResizePaneDown => self.nudge_visualiser_height(-1),
 
             Action::LibraryModeNext => {
                 if self.tab == Tab::Library {
@@ -1133,7 +1267,13 @@ impl App {
 
         // Pane sizes are part of the saved layout; persist them as they change
         // rather than relying on a later save happening to pick them up.
-        if matches!(action, Action::ResizePaneLeft | Action::ResizePaneRight) {
+        if matches!(
+            action,
+            Action::ResizePaneLeft
+                | Action::ResizePaneRight
+                | Action::ResizePaneUp
+                | Action::ResizePaneDown
+        ) {
             self.save_queue_state();
         }
     }
@@ -1166,6 +1306,11 @@ impl App {
                     Region::PlayPause => self.player.send(PlayerCommand::TogglePause),
                     Region::Repeat => self.player.send(PlayerCommand::ToggleRepeat),
                     Region::Shuffle => self.player.send(PlayerCommand::ToggleShuffle),
+                    Region::Visualiser => {
+                        self.active_drag = Some(Region::Visualiser);
+                        self.drag_start_viz_height = Some(self.visualiser_height);
+                        self.update_visualiser_drag(event.row, hits);
+                    }
                     Region::CurrentArtist => self.jump_to_current_artist(),
                     Region::CurrentAlbum => self.jump_to_current_album(),
                     Region::Seek => {
@@ -1207,13 +1352,25 @@ impl App {
 
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(drag_region) = self.active_drag {
-                    self.update_drag_ratio(event.column, hits, drag_region);
+                    if drag_region == Region::Visualiser {
+                        self.update_visualiser_drag(event.row, hits);
+                    } else {
+                        self.update_drag_ratio(event.column, hits, drag_region);
+                    }
                 }
             }
 
             MouseEventKind::Up(MouseButton::Left) => {
                 if let Some(drag_region) = self.active_drag.take() {
                     match drag_region {
+                        Region::Visualiser => {
+                            let start = self.drag_start_viz_height.take();
+                            if start == Some(self.visualiser_height) {
+                                self.handle_action(Action::CycleVisualiser);
+                            } else {
+                                self.save_queue_state();
+                            }
+                        }
                         Region::Seek => {
                             let Some(song) = self.player.status().current else {
                                 return;
@@ -2634,11 +2791,26 @@ impl App {
         self.queue_percent = step_percent(self.queue_percent, direction);
     }
 
+    fn nudge_visualiser_height(&mut self, direction: i8) {
+        let step = 2;
+        let new_height =
+            (self.visualiser_height as i16 + direction as i16 * step).clamp(3, 40) as u16;
+        self.visualiser_height = new_height;
+    }
+
+    fn update_visualiser_drag(&mut self, row: u16, hits: &Hits) {
+        if let Some(rect) = hits.rect_of(Region::Visualiser) {
+            let bottom = rect.y.saturating_add(rect.height);
+            let new_height = bottom.saturating_sub(row).clamp(3, 40);
+            self.visualiser_height = new_height;
+        }
+    }
+
     // ---- pane size tweening ---------------------------------------------
 
     /// Advance the pane-size animations one frame, and report the sizes to draw
     /// with. Called once per frame from the renderer.
-    pub fn tween_panes(&mut self) -> (u16, u16) {
+    pub fn tween_panes(&mut self) -> (u16, u16, u16) {
         fn ease(current: &mut f32, target: u16) -> u16 {
             let target = target as f32;
             if (target - *current).abs() < PANE_EPSILON {
@@ -2651,12 +2823,51 @@ impl App {
         (
             ease(&mut self.eased_cover, self.cover_percent),
             ease(&mut self.eased_queue, self.queue_percent),
+            ease(&mut self.eased_visualiser_height, self.visualiser_height),
         )
     }
 
     fn panes_are_tweening(&self) -> bool {
         (self.eased_cover - self.cover_percent as f32).abs() >= PANE_EPSILON
             || (self.eased_queue - self.queue_percent as f32).abs() >= PANE_EPSILON
+            || (self.eased_visualiser_height - self.visualiser_height as f32).abs() >= PANE_EPSILON
+    }
+
+    /// What the frame looks like, coarsely: enough to notice when the album art
+    /// needs a clean repaint instead of a diff.
+    ///
+    /// Album art is drawn by a terminal graphics protocol, which means its cells
+    /// are marked `skip` and the backend deliberately writes nothing to them. A
+    /// popup drawn on top puts real text in those cells; when it closes, the
+    /// artwork re-skips them and the popup's characters are never overwritten —
+    /// which is the fragment left behind on screen. Comparing this value between
+    /// frames catches every such transition in one place, rather than asking a
+    /// dozen `overlay = …` and pane-toggle sites to remember to invalidate.
+    pub fn frame_shape(&self) -> FrameShape {
+        FrameShape {
+            overlay: self.overlay.as_ref().map(|overlay| overlay.kind()),
+            show_help: self.show_help,
+            focus_mode: self.focus_mode,
+            panes: [
+                self.show_queue_pane,
+                self.show_cover_pane,
+                self.show_lyrics_pane,
+                self.show_focus_lyrics,
+                self.show_visualiser,
+            ],
+            // Mid-tween the panes move a column at a time, so the artwork's rect
+            // moves with them and would otherwise smear. Tracking the eased
+            // sizes rather than "is tweening" catches every step of the glide,
+            // not just its start and end.
+            panes_sizes: [
+                self.eased_cover.round() as u16,
+                self.eased_queue.round() as u16,
+                self.eased_visualiser_height.round() as u16,
+            ],
+            cover: self.cover_generation,
+            tab: self.tab as u8,
+            viz_mode: self.viz_mode,
+        }
     }
 
     /// Whether anything on screen is animating and therefore needs redrawing.
@@ -2799,6 +3010,71 @@ pub fn format_duration(duration: Duration) -> String {
 mod tests {
     use super::*;
 
+    fn shape() -> FrameShape {
+        FrameShape {
+            overlay: None,
+            show_help: false,
+            focus_mode: false,
+            panes: [true, true, false, true, true],
+            panes_sizes: [30, 30, 8],
+            cover: 0,
+            tab: 0,
+            viz_mode: crate::ui::visualiser::VizMode::Aurora,
+        }
+    }
+
+    /// Each of these is a case where a popup or a moving pane can leave debris
+    /// over the artwork, so each must be visible as a change of shape.
+    #[test]
+    fn everything_that_can_cover_the_artwork_changes_the_frame_shape() {
+        let base = shape();
+        assert_eq!(base, shape(), "an unchanged frame must not force a repaint");
+
+        let opened = FrameShape {
+            overlay: Some(0),
+            ..base
+        };
+        assert_ne!(base, opened, "opening a popup");
+        assert_ne!(
+            opened,
+            FrameShape {
+                overlay: Some(1),
+                ..base
+            },
+            "swapping one popup for another"
+        );
+        assert_ne!(
+            base,
+            FrameShape {
+                show_help: true,
+                ..base
+            },
+            "opening the help sheet"
+        );
+        assert_ne!(
+            base,
+            FrameShape {
+                panes_sizes: [31, 30, 8],
+                ..base
+            },
+            "a pane mid-glide"
+        );
+        assert_ne!(base, FrameShape { cover: 1, ..base }, "new artwork");
+        for changed in [
+            FrameShape {
+                focus_mode: true,
+                ..base
+            },
+            FrameShape {
+                panes: [false, true, false, true, true],
+                ..base
+            },
+            FrameShape { tab: 1, ..base },
+        ] {
+            assert_ne!(base, changed, "{changed:?} should force a repaint");
+        }
+    }
+
     /// The Up Next pane used to be reachable only by clicking it: it was drawn
     /// beside every tab but was in no tab's focus order.
     #[test]
@@ -2810,7 +3086,10 @@ mod tests {
                 Some(&Pane::Queue),
                 "{tab:?} should end at the Up Next pane"
             );
-            assert!(panes.len() > 1, "{tab:?} should have somewhere to come back to");
+            assert!(
+                panes.len() > 1,
+                "{tab:?} should have somewhere to come back to"
+            );
         }
     }
 
@@ -2985,5 +3264,14 @@ mod tests {
         hits.push(area, Region::Seek);
         assert_eq!(hits.rect_of(Region::Seek), Some(area));
         assert_eq!(hits.rect_of(Region::Volume), None);
+    }
+
+    #[test]
+    fn visualiser_height_resizes_and_clamps() {
+        let mut height = 8u16;
+        height = (height as i16 + 2).clamp(3, 40) as u16;
+        assert_eq!(height, 10);
+        height = (height as i16 - 2).clamp(3, 40) as u16;
+        assert_eq!(height, 8);
     }
 }

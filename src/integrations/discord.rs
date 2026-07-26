@@ -96,6 +96,14 @@ impl Presence {
     async fn run(&mut self) {
         let mut backoff = RECONNECT_MIN;
 
+        // Checked once, before the first connection: an application id Discord
+        // does not know is accepted by the IPC socket and then renders as
+        // nothing at all, which is indistinguishable from "Discord is ignoring
+        // us" from the outside.
+        if let Some(problem) = unknown_application(&self.config.client_id).await {
+            self.report(&problem);
+        }
+
         loop {
             let mut ipc = DiscordIpcClient::new(&self.config.client_id);
             match ipc.connect() {
@@ -251,6 +259,39 @@ impl Presence {
     }
 }
 
+/// Ask Discord whether an application id exists, returning what to tell the
+/// user when it does not.
+///
+/// Rich Presence has no way to report this: the client (or an arRPC bridge, as
+/// Vesktop and Equibop use) takes the activity, resolves the application's name
+/// from its id, and silently displays nothing when that lookup fails. Checking
+/// it ourselves is the difference between a status line that explains the
+/// problem and one that says everything is fine.
+async fn unknown_application(client_id: &str) -> Option<String> {
+    let url = format!("https://discord.com/api/v9/applications/{client_id}/rpc");
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .ok()?
+        .get(url)
+        .send()
+        .await
+        .ok()?;
+
+    // Anything other than a clear "no such application" is not ours to
+    // diagnose: offline, rate-limited or a Discord outage must not produce a
+    // scary message about the user's config.
+    (response.status() == reqwest::StatusCode::NOT_FOUND).then(|| application_advice(client_id))
+}
+
+/// What to say when Discord has never heard of the configured application.
+fn application_advice(client_id: &str) -> String {
+    format!(
+        "Discord does not know application {client_id}: create one at \
+         discord.com/developers/applications and set [discord] client_id"
+    )
+}
+
 /// Guard against ever handing Discord a credential-bearing URL.
 ///
 /// Subsonic auth travels as `t=` (token), `s=` (salt) or `p=` (password) query
@@ -264,6 +305,16 @@ pub fn is_safe_to_share(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_advice_names_the_id_and_what_to_do_about_it() {
+        let advice = super::application_advice("1182283995878440970");
+        assert!(advice.contains("1182283995878440970"), "{advice}");
+        assert!(
+            advice.contains("client_id"),
+            "must say which setting: {advice}"
+        );
+    }
+
     use super::*;
 
     #[test]

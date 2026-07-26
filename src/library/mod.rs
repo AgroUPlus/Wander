@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::subsonic::lyrics::Lyrics;
+use crate::subsonic::lyrics::LyricSet;
 use crate::subsonic::models::{
     Album, AlbumInfo, Artist, Genre, Playlist, SearchResult3, Share, Song,
 };
@@ -148,8 +148,8 @@ pub trait Library: Send + Sync {
     async fn search(&self, _query: &str, _count: u32) -> Result<SearchResult3> {
         Ok(SearchResult3::default())
     }
-    async fn lyrics(&self, _song_id: &str) -> Result<Lyrics> {
-        Ok(Lyrics::default())
+    async fn lyrics(&self, _song_id: &str) -> Result<LyricSet> {
+        Ok(LyricSet::default())
     }
     async fn cover_art(&self, _cover_id: &str, _size: u32) -> Result<Vec<u8>> {
         anyhow::bail!("no cover art for this source")

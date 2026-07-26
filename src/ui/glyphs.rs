@@ -48,6 +48,9 @@ pub enum Icon {
     CoverLoading,
     CoverMissing,
     Star,
+    /// Stands in for a lyric line with no words: an instrumental break should
+    /// look deliberate rather than like the pane stopped working.
+    LyricGap,
 }
 
 impl GlyphSet {
@@ -76,6 +79,7 @@ impl GlyphSet {
             (GlyphSet::Nerd, CoverLoading) => "󰋞",
             (GlyphSet::Nerd, CoverMissing) => "󰎆",
             (GlyphSet::Nerd, Star) => "󰋑",
+            (GlyphSet::Nerd, LyricGap) => "󰝚",
 
             (GlyphSet::Unicode, Paused) => "⏸",
             (GlyphSet::Unicode, Stopped) => "■",
@@ -99,6 +103,7 @@ impl GlyphSet {
             (GlyphSet::Unicode, CoverLoading) => "◌",
             (GlyphSet::Unicode, CoverMissing) => "♪",
             (GlyphSet::Unicode, Star) => "★",
+            (GlyphSet::Unicode, LyricGap) => "♪",
 
             (GlyphSet::Ascii, Paused) => "=",
             (GlyphSet::Ascii, Stopped) => "#",
@@ -122,13 +127,14 @@ impl GlyphSet {
             (GlyphSet::Ascii, CoverLoading) => ".",
             (GlyphSet::Ascii, CoverMissing) => "-",
             (GlyphSet::Ascii, Star) => "*",
+            (GlyphSet::Ascii, LyricGap) => "~",
         }
     }
 }
 
 /// Every icon the UI can ask for, so the tests can sweep them.
 #[cfg(test)]
-pub const ALL_ICONS: [Icon; 22] = [
+pub const ALL_ICONS: [Icon; 23] = [
     Icon::Paused,
     Icon::Stopped,
     Icon::Buffering,
@@ -151,6 +157,7 @@ pub const ALL_ICONS: [Icon; 22] = [
     Icon::CoverLoading,
     Icon::CoverMissing,
     Icon::Star,
+    Icon::LyricGap,
 ];
 
 #[cfg(test)]

@@ -33,6 +33,19 @@ pub enum Overlay {
     Setup(SetupState),
 }
 
+impl Overlay {
+    /// Which popup this is, ignoring its contents. Lets the frame loop notice
+    /// one popup being replaced by another, which changes what is covered.
+    pub fn kind(&self) -> u8 {
+        match self {
+            Overlay::Share(_) => 0,
+            Overlay::Playlist(_) => 1,
+            Overlay::Palette(_) => 2,
+            Overlay::Setup(_) => 3,
+        }
+    }
+}
+
 /// The first-run chooser.
 ///
 /// wander used to refuse to start without a hand-written `config.toml`. Now it
@@ -556,6 +569,22 @@ fn draw_playlist(frame: &mut Frame, area: Rect, state: &PlaylistState, theme: &T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The frame loop compares these tags to notice one popup replacing
+    /// another, which it cannot do if two popups share a tag.
+    #[test]
+    fn every_popup_has_its_own_kind() {
+        let kinds = [
+            Overlay::Share(ShareState::new(Vec::new())).kind(),
+            Overlay::Playlist(PlaylistState::new(Vec::new(), Vec::new())).kind(),
+            Overlay::Palette(PaletteState::default()).kind(),
+            Overlay::Setup(SetupState::default()).kind(),
+        ];
+        let mut unique = kinds.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), kinds.len(), "kinds collide: {kinds:?}");
+    }
 
     #[test]
     fn popup_is_clamped_to_a_small_screen() {

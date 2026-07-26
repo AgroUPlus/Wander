@@ -48,10 +48,19 @@ pub enum Action {
     ToggleCoverPane,
     ToggleLyricsPane,
     ToggleVisualiser,
+    /// Step through the visualiser's drawing styles.
+    CycleVisualiser,
+    /// Step through the lyric variants a track offers (translations,
+    /// romanisations, other languages).
+    CycleLyricVariant,
+    /// Ask the configured translation endpoint for the current lyrics.
+    TranslateLyrics,
     ToggleRadio,
     ToggleStar,
     ResizePaneLeft,
     ResizePaneRight,
+    ResizePaneUp,
+    ResizePaneDown,
     JumpToArtist,
     JumpToAlbum,
 
@@ -119,10 +128,14 @@ impl Action {
             | Left | Right | FocusNext | FocusPrev | Confirm | Cancel => Category::Navigation,
             LibraryModeNext | LibraryModePrev | JumpToArtist | JumpToAlbum | ToggleStar
             | RatingUp | RatingDown | AddToPlaylist | Share => Category::Library,
+            CycleLyricVariant | TranslateLyrics => Category::Panels,
             AddToQueue | PlayNext | RemoveFromQueue | ClearQueue | MoveTrackUp | MoveTrackDown
             | UndoQueue => Category::Queue,
             ToggleQueuePane | ToggleCoverPane | ToggleLyricsPane | ToggleVisualiser
-            | ToggleFocusMode | ResizePaneLeft | ResizePaneRight => Category::Panels,
+            | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight
+            | ResizePaneUp | ResizePaneDown => {
+                Category::Panels
+            }
             OpenPalette => Category::Navigation,
             Quit | Refresh | ToggleHelp => Category::Misc,
         }
@@ -163,12 +176,17 @@ impl Action {
             Action::ToggleCoverPane => "toggle cover pane",
             Action::ToggleLyricsPane => "toggle lyrics pane",
             Action::ToggleVisualiser => "toggle visualiser",
+            Action::CycleVisualiser => "cycle visualiser style",
+            Action::CycleLyricVariant => "cycle lyric language / romanisation",
+            Action::TranslateLyrics => "translate the current lyrics",
             Action::ToggleRadio => "radio mode (auto-queue)",
             Action::ToggleStar => "star / unstar track",
             Action::FocusNext => "focus the next pane (e.g. Up Next)",
             Action::FocusPrev => "focus the previous pane",
             Action::ResizePaneLeft => "move divider left (wider side panes)",
             Action::ResizePaneRight => "move divider right (wider content)",
+            Action::ResizePaneUp => "increase visualiser height / move divider up",
+            Action::ResizePaneDown => "decrease visualiser height / move divider down",
             Action::JumpToArtist => "jump to track artist",
             Action::JumpToAlbum => "jump to track album",
             Action::LibraryModeNext => "next library view",
@@ -213,6 +231,8 @@ impl Default for Keymap {
         bind(KeyCode::Char('['), n, PrevTab);
         bind(KeyCode::Left, a, ResizePaneLeft);
         bind(KeyCode::Right, a, ResizePaneRight);
+        bind(KeyCode::Up, a, ResizePaneUp);
+        bind(KeyCode::Down, a, ResizePaneDown);
         bind(KeyCode::Char('A'), s, JumpToArtist);
         bind(KeyCode::Char('a'), a, JumpToArtist);
         bind(KeyCode::Char('B'), s, JumpToAlbum);
@@ -273,6 +293,9 @@ impl Default for Keymap {
         bind(KeyCode::Char('L'), s, ToggleLyricsPane);
         bind(KeyCode::Char('y'), n, ToggleLyricsPane);
         bind(KeyCode::Char('v'), n, ToggleVisualiser);
+        bind(KeyCode::Char('V'), s, CycleVisualiser);
+        bind(KeyCode::Char('Y'), s, CycleLyricVariant);
+        bind(KeyCode::Char('T'), s, TranslateLyrics);
         bind(KeyCode::Char('x'), n, ToggleRadio);
         bind(KeyCode::Char('*'), n, ToggleStar);
 
@@ -439,10 +462,15 @@ impl Action {
             ToggleCoverPane,
             ToggleLyricsPane,
             ToggleVisualiser,
+            CycleVisualiser,
+            CycleLyricVariant,
+            TranslateLyrics,
             ToggleRadio,
             ToggleStar,
             ResizePaneLeft,
             ResizePaneRight,
+            ResizePaneUp,
+            ResizePaneDown,
             JumpToArtist,
             JumpToAlbum,
             LibraryModeNext,
@@ -688,6 +716,10 @@ mod tests {
         assert_eq!(map.resolve(key('[')), Some(Action::PrevTab));
         let alt_right = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT);
         assert_eq!(map.resolve(alt_right), Some(Action::ResizePaneRight));
+        let alt_up = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        assert_eq!(map.resolve(alt_up), Some(Action::ResizePaneUp));
+        let alt_down = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        assert_eq!(map.resolve(alt_down), Some(Action::ResizePaneDown));
     }
 
     /// Focus cycling has to be on its own keys: the plain arrows are already

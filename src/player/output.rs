@@ -183,8 +183,14 @@ impl AudioOutput {
                     // Feed the visualiser a mono downmix. `push` is allowed to
                     // fail: dropping samples when the UI is slow is invisible,
                     // whereas blocking here would be audible.
+                    //
+                    // Undo the volume gain first: the visualiser is showing the
+                    // *music*, and bars that shrank when the user turned the
+                    // volume down read as a bug. A muted output has nothing to
+                    // recover, so leave it alone rather than divide by ~zero.
+                    let tap_scale = if gain > 1e-4 { 1.0 / gain } else { 0.0 };
                     for frame in output[..filled].chunks_exact(channels) {
-                        let mono = frame.iter().sum::<f32>() / channels as f32;
+                        let mono = frame.iter().sum::<f32>() / channels as f32 * tap_scale;
                         if tap_producer.push(mono).is_err() {
                             break;
                         }
