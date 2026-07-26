@@ -30,6 +30,7 @@ impl Default for Theme {
 
 impl Theme {
     pub const PRESET_NAMES: &'static [&'static str] = &[
+        "Terminal (ANSI 16)",
         "Tokyo Night",
         "Catppuccin Mocha",
         "Nord",
@@ -48,6 +49,7 @@ impl Theme {
 
     pub fn preset(name: &str) -> Self {
         match name {
+            "Terminal (ANSI 16)" => Self::terminal_ansi(),
             "Catppuccin Mocha" => Self::catppuccin_mocha(),
             "Nord" => Self::nord(),
             "Dracula" => Self::dracula(),
@@ -184,6 +186,24 @@ impl Theme {
                 0xa9dc76, 0xff6188, 0xab9df2, 0xfc9867,
             ],
         )
+    }
+
+    pub fn terminal_ansi() -> Self {
+        Self {
+            background: ThemeColor(Color::Reset),
+            foreground: ThemeColor(Color::Reset),
+            border: ThemeColor(Color::Indexed(8)),         // Dark Gray (color 8)
+            border_focused: ThemeColor(Color::Indexed(6)), // Cyan (color 6)
+            accent: ThemeColor(Color::Indexed(6)),         // Cyan (color 6)
+            highlight_bg: ThemeColor(Color::Indexed(8)),   // Dark Gray selection background
+            highlight_fg: ThemeColor(Color::Indexed(15)),  // Bright White text
+            current_track: ThemeColor(Color::Indexed(2)), // Green (color 2)
+            dim: ThemeColor(Color::Indexed(8)),           // Dark Gray (color 8)
+            progress: ThemeColor(Color::Indexed(4)),      // Blue (color 4)
+            error: ThemeColor(Color::Indexed(1)),         // Red (color 1)
+            viz_low: ThemeColor(Color::Indexed(2)),       // Green (color 2)
+            viz_high: ThemeColor(Color::Indexed(5)),      // Magenta (color 5)
+        }
     }
 
     pub fn tokyo_night() -> Self {
@@ -373,8 +393,13 @@ pub fn parse_color(text: &str) -> Option<Color> {
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
         return Some(Color::Rgb(r, g, b));
     }
-    Some(match text.to_ascii_lowercase().as_str() {
-        "reset" => Color::Reset,
+    let lower = text.to_ascii_lowercase();
+    let stripped = lower.strip_prefix("color").unwrap_or(&lower);
+    if let Ok(idx) = stripped.parse::<u8>() {
+        return Some(Color::Indexed(idx));
+    }
+    Some(match lower.as_str() {
+        "reset" | "default" => Color::Reset,
         "black" => Color::Black,
         "red" => Color::Red,
         "green" => Color::Green,
@@ -384,6 +409,12 @@ pub fn parse_color(text: &str) -> Option<Color> {
         "cyan" => Color::Cyan,
         "gray" | "grey" => Color::Gray,
         "darkgray" | "darkgrey" => Color::DarkGray,
+        "lightred" => Color::LightRed,
+        "lightgreen" => Color::LightGreen,
+        "lightyellow" => Color::LightYellow,
+        "lightblue" => Color::LightBlue,
+        "lightmagenta" => Color::LightMagenta,
+        "lightcyan" => Color::LightCyan,
         "white" => Color::White,
         other => Color::Indexed(other.parse().ok()?),
     })
@@ -402,6 +433,16 @@ mod tests {
     fn parses_named_and_indexed_colors() {
         assert_eq!(parse_color("cyan"), Some(Color::Cyan));
         assert_eq!(parse_color("42"), Some(Color::Indexed(42)));
+        assert_eq!(parse_color("color0"), Some(Color::Indexed(0)));
+        assert_eq!(parse_color("color15"), Some(Color::Indexed(15)));
+        assert_eq!(parse_color("default"), Some(Color::Reset));
+    }
+
+    #[test]
+    fn terminal_ansi_preset_creates_valid_theme() {
+        let theme = Theme::preset("Terminal (ANSI 16)");
+        assert_eq!(theme.background.0, Color::Reset);
+        assert_eq!(theme.accent.0, Color::Indexed(6));
     }
 
     #[test]
