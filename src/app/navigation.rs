@@ -9,6 +9,7 @@ pub fn focus_order(tab: Tab, library_mode: LibraryMode, side_queue: bool) -> Vec
         Tab::Home => vec![Pane::Home],
         Tab::Queue => vec![Pane::Queue],
         Tab::Library => library_mode.panes().to_vec(),
+        Tab::Online => vec![Pane::Online],
         Tab::Settings => vec![Pane::Settings],
     };
     // The Up Next pane is drawn to the right of everything else, so it is the
@@ -84,10 +85,11 @@ impl App {
     }
 
     pub(crate) fn cycle_tab(&mut self, delta: isize) {
-        let current = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0) as isize;
-        let count = Tab::ALL.len() as isize;
+        let available = Tab::available(&self.config);
+        let current = available.iter().position(|t| *t == self.tab).unwrap_or(0) as isize;
+        let count = available.len() as isize;
         let next = (current + delta).rem_euclid(count) as usize;
-        self.go_to_tab(Tab::ALL[next]);
+        self.go_to_tab(available[next]);
     }
 
     /// Move focus between the panes of the current tab.
@@ -138,6 +140,12 @@ impl App {
             Pane::PlaylistSongs => self.playlist_songs.len(),
             Pane::Tracks => self.tracks.len(),
             Pane::Favorites => self.favorites.len(),
+            Pane::Online => match self.online_source {
+                #[cfg(feature = "nyaa")]
+                OnlineSource::Nyaa => self.nyaa_plugin.results.len(),
+                OnlineSource::Archive => self.archive_plugin.results.len(),
+                OnlineSource::Jamendo => self.jamendo_plugin.results.len(),
+            },
             Pane::Settings => crate::ui::settings::rows(&self.config).len(),
             Pane::Home => crate::ui::home::mix_count(self),
             // Synced lyrics scroll with playback and have no cursor; unsynced
@@ -165,6 +173,12 @@ impl App {
             Pane::Tracks => &mut self.track_sel,
             Pane::Favorites => &mut self.favorite_sel,
             Pane::Lyrics => &mut self.lyrics_sel,
+            Pane::Online => match self.online_source {
+                #[cfg(feature = "nyaa")]
+                OnlineSource::Nyaa => &mut self.nyaa_plugin.selection,
+                OnlineSource::Archive => &mut self.archive_plugin.selection,
+                OnlineSource::Jamendo => &mut self.jamendo_plugin.selection,
+            },
             Pane::Settings => &mut self.settings_sel,
             Pane::Home => &mut self.home_sel,
         }
@@ -229,8 +243,8 @@ impl App {
             Pane::PlaylistSongs => (self.playlist_songs.clone(), self.playlist_song_sel.index),
             Pane::Tracks => (self.tracks.clone(), self.track_sel.index),
             Pane::Favorites => (self.favorites.clone(), self.favorite_sel.index),
-            // Nothing selectable: lyrics, settings & home track their own state.
-            Pane::Lyrics | Pane::Settings | Pane::Home => (Vec::new(), 0),
+            // Nothing selectable: lyrics, settings, home & online track their own state.
+            Pane::Lyrics | Pane::Settings | Pane::Home | Pane::Online => (Vec::new(), 0),
         }
     }
 
@@ -250,6 +264,35 @@ impl App {
     }
 
     pub(crate) fn activate(&mut self) {
+        if self.focus == Pane::Online {
+            let (action, stream): (_, fn(&mut Self)) = match self.online_source {
+                #[cfg(feature = "nyaa")]
+                OnlineSource::Nyaa => (
+                    self.config.plugins.nyaa.primary_action,
+                    Self::stream_selected_nyaa_item as fn(&mut Self),
+                ),
+                OnlineSource::Archive => (
+                    self.config.plugins.archive.primary_action,
+                    Self::stream_selected_archive_item as fn(&mut Self),
+                ),
+                OnlineSource::Jamendo => (
+                    self.config.plugins.jamendo.primary_action,
+                    Self::stream_selected_jamendo_track as fn(&mut Self),
+                ),
+            };
+            let download: fn(&mut Self) = match self.online_source {
+                #[cfg(feature = "nyaa")]
+                OnlineSource::Nyaa => Self::download_selected_nyaa_item,
+                OnlineSource::Archive => Self::download_selected_archive_item,
+                OnlineSource::Jamendo => Self::download_selected_jamendo_track,
+            };
+            if action == crate::config::OnlinePrimaryAction::Stream {
+                stream(self);
+            } else {
+                download(self);
+            }
+            return;
+        }
         if self.focus == Pane::Settings {
             self.activate_setting();
             return;

@@ -9,7 +9,7 @@ pub struct FrameShape {
     pub(crate) overlay: Option<u8>,
     pub(crate) show_help: bool,
     pub(crate) focus_mode: bool,
-    pub(crate) panes: [bool; 5],
+    pub(crate) panes: [bool; 7],
     pub(crate) panes_sizes: [u16; 3],
     pub(crate) cover: u64,
     pub(crate) tab: u8,
@@ -23,19 +23,80 @@ pub enum Tab {
     /// Artists, albums, tracks and playlists are all views of one library, not
     /// separate destinations — an album is always reachable through its artist.
     Library,
+    Online,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Home, Tab::Queue, Tab::Library, Tab::Settings];
+    #[allow(dead_code)]
+    pub const ALL: [Tab; 5] = [
+        Tab::Home,
+        Tab::Queue,
+        Tab::Library,
+        Tab::Online,
+        Tab::Settings,
+    ];
+
+    pub fn available(config: &crate::config::Config) -> Vec<Tab> {
+        let mut tabs = vec![Tab::Home, Tab::Queue, Tab::Library];
+        #[allow(unused_mut)]
+        let mut any_plugin = config.plugins.archive.enabled || config.plugins.jamendo.enabled;
+        #[cfg(feature = "nyaa")]
+        {
+            any_plugin = any_plugin || config.plugins.nyaa.enabled;
+        }
+        if any_plugin {
+            tabs.push(Tab::Online);
+        }
+        tabs.push(Tab::Settings);
+        tabs
+    }
 
     pub fn title(self) -> &'static str {
         match self {
             Tab::Home => "Home",
             Tab::Queue => "Queue",
             Tab::Library => "Library",
+            Tab::Online => "Online",
             Tab::Settings => "Settings",
         }
+    }
+}
+
+/// Which online plugin the Online tab is currently showing. Both plugins share
+/// one tab and one pane; this picks which one owns the screen and the keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum OnlineSource {
+    #[cfg(feature = "nyaa")]
+    Nyaa,
+    Archive,
+    Jamendo,
+}
+
+impl OnlineSource {
+    pub fn title(self) -> &'static str {
+        match self {
+            #[cfg(feature = "nyaa")]
+            OnlineSource::Nyaa => "nyaa.si",
+            OnlineSource::Archive => "Internet Archive",
+            OnlineSource::Jamendo => "Jamendo",
+        }
+    }
+
+    /// The sources the user has switched on, in switching order.
+    pub fn available(config: &crate::config::Config) -> Vec<OnlineSource> {
+        let mut sources = Vec::new();
+        #[cfg(feature = "nyaa")]
+        if config.plugins.nyaa.enabled {
+            sources.push(OnlineSource::Nyaa);
+        }
+        if config.plugins.archive.enabled {
+            sources.push(OnlineSource::Archive);
+        }
+        if config.plugins.jamendo.enabled {
+            sources.push(OnlineSource::Jamendo);
+        }
+        sources
     }
 }
 
@@ -96,6 +157,7 @@ pub enum Pane {
     /// Starred tracks in the Library tab.
     Favorites,
     Lyrics,
+    Online,
     Settings,
 }
 
@@ -156,7 +218,46 @@ pub enum LoadEvent {
         songs: usize,
         albums: usize,
     },
+    /// A plugin reporting progress on something slow, shown on the status
+    /// line. A torrent can take minutes; silence reads as a hang.
+    PluginStatus(String),
+    #[cfg(feature = "nyaa")]
+    NyaaResults(Result<Vec<crate::plugins::nyaa::NyaaItem>, String>),
+    ArchiveResults(Result<Vec<crate::plugins::archive::ArchiveItem>, String>),
+    /// An item's track list, fetched to show its length and to have it ready
+    /// when the item is played. `None` means the metadata could not be read.
+    ArchiveItemFiles {
+        identifier: String,
+        files: Option<Vec<crate::plugins::archive::ArchiveFile>>,
+    },
+    JamendoResults(Result<Vec<crate::plugins::jamendo::JamendoTrack>, String>),
+    JamendoDownloadFinished {
+        title: String,
+        result: Result<std::path::PathBuf, String>,
+    },
+    /// Tracks of an Archive item, resolved to direct stream URLs.
+    ArchiveStreamReady(Result<Vec<Song>, String>),
+    ArchiveDownloadFinished {
+        title: String,
+        result: Result<std::path::PathBuf, String>,
+    },
+    #[cfg(feature = "nyaa")]
+    NyaaStreamReady(Result<Vec<Song>, String>),
+    #[cfg(feature = "nyaa")]
+    NyaaDownloadFinished {
+        title: String,
+        result: Result<std::path::PathBuf, String>,
+    },
     Error(String),
+}
+
+/// A running plugin download, and the switch that stops it.
+///
+/// Aborting the task alone is not enough for a torrent: aria2c runs as its own
+/// process, so the flag is what tells the polling loop to kill it.
+pub struct PluginJob {
+    pub handle: tokio::task::JoinHandle<()>,
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// A list selection that stays in range as the underlying list changes.

@@ -91,6 +91,9 @@ struct IdentityWidths {
 
 /// Separators between the three parts: `"  "` and `" · "`.
 const IDENTITY_SEPARATORS: usize = 2 + 3;
+/// The source badge and its trailing space, which lead the identity column.
+/// Reserved up front so the badge can never crowd out the title.
+const SOURCE_BADGE: usize = 2;
 /// Artist and album stop growing here even when the row is enormous, so the
 /// eye still lands on the title first.
 const ARTIST_CAP: usize = 25;
@@ -115,8 +118,9 @@ fn identity_widths(
     album: usize,
     stars: usize,
 ) -> IdentityWidths {
-    // Stars sit after the album with their own two-space gap.
-    let overhead = IDENTITY_SEPARATORS + if stars > 0 { stars + 2 } else { 0 };
+    // Stars sit after the album with their own two-space gap; the source
+    // badge sits before the title with its own single space.
+    let overhead = IDENTITY_SEPARATORS + SOURCE_BADGE + if stars > 0 { stars + 2 } else { 0 };
     let content = available.saturating_sub(overhead);
 
     let mut widths = IdentityWidths {
@@ -213,7 +217,7 @@ fn draw_track_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits:
             let album = truncate(song.album_or_unknown(), widths.album);
 
             let artist_rect = Rect {
-                x: columns[1].x + title.chars().count() as u16 + 2,
+                x: columns[1].x + SOURCE_BADGE as u16 + title.chars().count() as u16 + 2,
                 y: columns[1].y,
                 width: artist.chars().count() as u16,
                 height: 1,
@@ -229,6 +233,8 @@ fn draw_track_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits:
             hits.push(album_rect, Region::CurrentAlbum);
 
             let mut spans = vec![
+                super::widgets::source_span(&song.id, glyphs, theme),
+                Span::raw(" "),
                 Span::styled(title, theme.playing()),
                 Span::styled("  ", theme.dim()),
                 Span::styled(artist, theme.title()),
@@ -407,7 +413,8 @@ mod tests {
         for available in 0usize..200 {
             for stars in [0usize, 5] {
                 let w = identity_widths(available, 80, 40, 40, stars);
-                let overhead = IDENTITY_SEPARATORS + if stars > 0 { stars + 2 } else { 0 };
+                let overhead =
+                    IDENTITY_SEPARATORS + SOURCE_BADGE + if stars > 0 { stars + 2 } else { 0 };
                 let used = w.title + w.artist + w.album + overhead;
                 assert!(
                     used <= available.max(overhead),

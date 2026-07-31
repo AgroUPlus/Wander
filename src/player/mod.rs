@@ -793,6 +793,16 @@ impl PlayerTask {
             }
         };
 
+        // The clock was set to the seek target optimistically; if the source
+        // could not honour it, correct it now rather than reporting a position
+        // the audio never reached.
+        if let Source::Http { starts_at, .. } = &source
+            && *starts_at != offset
+        {
+            self.shared
+                .reset_clock((starts_at.as_secs_f64() * self.shared.sample_rate() as f64) as u64);
+        }
+
         // A local file is seekable, so the decoder can start at the offset
         // itself; an HTTP body is not, which is why the server is asked to
         // start there instead.
@@ -810,45 +820,118 @@ impl PlayerTask {
                     return;
                 }
             },
-            Source::Http { url, http } => {
+            Source::Http { url, http, .. } => {
                 let (bytes_tx, bytes_rx) = mpsc::channel(NETWORK_CHANNEL_DEPTH);
                 let cancel_net = Arc::clone(&self.cancel);
 
-                // Network pump: fetch the body and feed chunks to the decoder.
+                // Network pump: fetch the body and feed chunks to the decoder,
+                // resuming with a byte range if the connection breaks partway.
+                //
+                // Without the resume, a dropped connection reached the decoder
+                // as a clean end-of-file, which is indistinguishable from a
+                // track that simply ended — so playback silently skipped to the
+                // next song mid-track instead of recovering.
                 let net_handle = tokio::spawn(async move {
-                    let response = match http.get(&url).send().await {
-                        Ok(response) => response,
-                        Err(err) => {
+                    let mut received: u64 = 0;
+                    let mut total: Option<u64> = None;
+                    let mut attempt = 0u32;
+
+                    loop {
+                        if cancel_net.load(Ordering::Relaxed) {
+                            return;
+                        }
+
+                        let mut request = http.get(&url);
+                        if received > 0 {
+                            request = request.header("Range", format!("bytes={received}-"));
+                        }
+
+                        let response = match request.send().await {
+                            Ok(response) => response,
+                            Err(err) => {
+                                if resume_again(&mut attempt, received).await {
+                                    continue;
+                                }
+                                let _ = bytes_tx
+                                    .send(Err(std::io::Error::other(format!(
+                                        "stream request failed: {err}"
+                                    ))))
+                                    .await;
+                                return;
+                            }
+                        };
+
+                        if !response.status().is_success() {
                             let _ = bytes_tx
                                 .send(Err(std::io::Error::other(format!(
-                                    "stream request failed: {err}"
+                                    "stream returned HTTP {}",
+                                    response.status()
                                 ))))
                                 .await;
                             return;
                         }
-                    };
-                    if !response.status().is_success() {
-                        let _ = bytes_tx
-                            .send(Err(std::io::Error::other(format!(
-                                "stream returned HTTP {}",
-                                response.status()
-                            ))))
-                            .await;
-                        return;
-                    }
 
-                    let mut stream = response.bytes_stream();
-                    while let Some(chunk) = stream.next().await {
-                        if cancel_net.load(Ordering::Relaxed) {
-                            return;
+                        // A server that ignores Range replies 200 with the whole
+                        // body; the bytes already delivered have to be dropped
+                        // rather than fed to the decoder a second time.
+                        let mut to_discard = if received > 0
+                            && response.status() != reqwest::StatusCode::PARTIAL_CONTENT
+                        {
+                            received
+                        } else {
+                            0
+                        };
+
+                        if total.is_none() && received == 0 {
+                            total = response.content_length();
                         }
-                        let message = chunk.map(|bytes| bytes.to_vec()).map_err(|err| {
-                            std::io::Error::other(format!("stream read failed: {err}"))
-                        });
-                        // A send error means the decoder is gone; stop pulling.
-                        if bytes_tx.send(message).await.is_err() {
-                            return;
+
+                        let mut stream = response.bytes_stream();
+                        let mut broke = false;
+                        while let Some(chunk) = stream.next().await {
+                            if cancel_net.load(Ordering::Relaxed) {
+                                return;
+                            }
+                            let mut bytes = match chunk {
+                                Ok(bytes) => bytes.to_vec(),
+                                Err(_) => {
+                                    broke = true;
+                                    break;
+                                }
+                            };
+
+                            if to_discard > 0 {
+                                let drop_now = to_discard.min(bytes.len() as u64);
+                                bytes.drain(..drop_now as usize);
+                                to_discard -= drop_now;
+                                if bytes.is_empty() {
+                                    continue;
+                                }
+                            }
+
+                            received += bytes.len() as u64;
+                            // A send error means the decoder is gone.
+                            if bytes_tx.send(Ok(bytes)).await.is_err() {
+                                return;
+                            }
                         }
+
+                        // Short of the advertised length: the body was cut off,
+                        // so pick up where it stopped instead of pretending the
+                        // track ended here.
+                        let truncated = matches!(total, Some(len) if received < len);
+                        if (broke || truncated) && resume_again(&mut attempt, received).await {
+                            continue;
+                        }
+
+                        if broke || truncated {
+                            let _ = bytes_tx
+                                .send(Err(std::io::Error::other(
+                                    "stream ended early and could not be resumed",
+                                )))
+                                .await;
+                        }
+                        return;
                     }
                 });
                 self.net_handle = Some(net_handle);
@@ -936,6 +1019,21 @@ impl PlayerTask {
     fn notice(&self, message: String) {
         self.status.lock().unwrap().error = Some(message);
     }
+}
+
+/// Whether a broken stream is worth another byte-range request.
+///
+/// Bounded so a server that keeps closing the connection surfaces an error
+/// rather than retrying for ever, and only when some bytes have arrived, since
+/// a stream that fails at offset zero is not a connection blip.
+async fn resume_again(attempt: &mut u32, received: u64) -> bool {
+    const MAX_RESUMES: u32 = 5;
+    if received == 0 || *attempt >= MAX_RESUMES {
+        return false;
+    }
+    *attempt += 1;
+    tokio::time::sleep(Duration::from_millis(250 * u64::from(*attempt))).await;
+    true
 }
 
 /// Clamp a seek target so it lands inside the track.

@@ -6,12 +6,12 @@
 //! swaps the *inner* backend, so there is nothing to hot-swap downstream and no
 //! restart to ask the user for.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::{Capabilities, Library, LocalLibrary, Source, SubsonicLibrary, is_local_id};
+use super::{Capabilities, Library, LocalLibrary, SongSource, Source, SubsonicLibrary, is_local_id};
 use crate::subsonic::lyrics::LyricSet;
 use crate::subsonic::models::{
     Album, AlbumInfo, Artist, Genre, Playlist, SearchResult3, Share, Song,
@@ -101,6 +101,31 @@ impl Library for MergedLibrary {
     }
 
     async fn open(&self, song: &Song, offset: Duration, force_transcode: bool) -> Result<Source> {
+        if song.id.starts_with("http://") || song.id.starts_with("https://") {
+            let http = reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_default();
+            return Ok(Source::Http {
+                url: song.id.clone(),
+                http,
+                // Nothing to ask an arbitrary host for: it serves the file from
+                // the beginning whatever offset was requested.
+                starts_at: Duration::ZERO,
+            });
+        }
+        let raw_path = song
+            .id
+            .strip_prefix(super::LOCAL_PREFIX)
+            .or_else(|| song.id.strip_prefix(super::ONLINE_PREFIX))
+            .unwrap_or(&song.id);
+        // Only an absolute path: a server id like "100" must never be able to
+        // pick up a file of that name in the process's working directory.
+        let path = std::path::PathBuf::from(raw_path);
+        if path.is_absolute() && path.is_file() {
+            return Ok(Source::File(path));
+        }
+
         match self.owner(&song.id) {
             Some(backend) => backend.open(song, offset, force_transcode).await,
             None if is_local_id(&song.id) => {
@@ -198,6 +223,32 @@ impl Library for MergedLibrary {
     }
 
     async fn cover_art(&self, cover_id: &str, size: u32) -> Result<Vec<u8>> {
+        // Online plugins have no backend to route to: their artwork is either
+        // a plain URL or embedded in a file they cached, so it is fetched here
+        // rather than being handed to a server that has never heard of it.
+        if cover_id.starts_with("http://") || cover_id.starts_with("https://") {
+            let http = reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()
+                .unwrap_or_default();
+            let response = http
+                .get(cover_id)
+                .send()
+                .await
+                .context("fetching cover art")?;
+            if !response.status().is_success() {
+                bail!("cover art request returned HTTP {}", response.status());
+            }
+            return Ok(response.bytes().await.context("reading cover art")?.to_vec());
+        }
+
+        if let Some(path) = cover_id.strip_prefix(super::ONLINE_PREFIX) {
+            let path = std::path::PathBuf::from(path);
+            return tokio::task::spawn_blocking(move || super::local::read_cover(&path))
+                .await
+                .unwrap_or_else(|err| bail!("cover art read panicked: {err}"));
+        }
+
         match self.owner(cover_id) {
             Some(b) => b.cover_art(cover_id, size).await,
             None => bail!("no backend owns cover art {cover_id}"),
@@ -219,7 +270,10 @@ impl Library for MergedLibrary {
         // A new playlist has no id to route on. Anything touching a local file
         // has to be stored locally, because the server cannot reference a path
         // on this machine; everything else prefers the server.
-        if song_ids.iter().any(|id| is_local_id(id)) {
+        if song_ids
+            .iter()
+            .any(|id| SongSource::of(id) != SongSource::Server)
+        {
             return match self.local() {
                 Some(local) => local.create_playlist(name, song_ids).await,
                 None => bail!("no local library is configured to store this playlist"),
@@ -277,8 +331,11 @@ impl Library for MergedLibrary {
         expires_ms: Option<i64>,
         downloadable: bool,
     ) -> Result<Share> {
-        if ids.iter().any(|id| is_local_id(id)) {
-            bail!("local tracks cannot be shared: there is no server to serve them");
+        if ids
+            .iter()
+            .any(|id| SongSource::of(id) != SongSource::Server)
+        {
+            bail!("only server tracks can be shared: there is no server to serve the others");
         }
         match self.remote() {
             Some(remote) => {

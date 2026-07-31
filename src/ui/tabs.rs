@@ -21,7 +21,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut 
     let mut spans = Vec::new();
     let mut x = inner.x;
 
-    for (index, tab) in Tab::ALL.iter().enumerate() {
+    let available = Tab::available(&app.config);
+    for (index, tab) in available.iter().enumerate() {
         let label = format!("  {}  ", tab.title());
         let width = label.chars().count() as u16;
 

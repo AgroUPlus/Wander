@@ -11,13 +11,17 @@ impl App {
             return;
         }
         // Say why up front rather than opening a dialog that can only fail:
-        // a local file has no public URL, and sharing needs a server.
-        if songs
+        // only the server can mint a share URL, so a local file or a track a
+        // plugin pulled off the internet has nothing to share.
+        if let Some(song) = songs
             .iter()
-            .any(|song| crate::library::is_local_id(&song.id))
+            .find(|song| crate::library::SongSource::of(&song.id) != crate::library::SongSource::Server)
         {
-            self.status_message =
-                Some("Local files cannot be shared — there is no server to serve them".to_string());
+            let source = crate::library::SongSource::of(&song.id);
+            self.status_message = Some(format!(
+                "{} tracks cannot be shared — there is no server to serve them",
+                source.label()
+            ));
             return;
         }
         if !self.library.capabilities().share {

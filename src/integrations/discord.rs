@@ -67,6 +67,7 @@ pub fn spawn(
         let mut presence = Presence {
             player,
             library,
+            http: reqwest::Client::new(),
             config,
             art: HashMap::new(),
             last: None,
@@ -90,6 +91,7 @@ struct Published {
 struct Presence {
     player: PlayerHandle,
     library: Arc<dyn Library>,
+    http: reqwest::Client,
     config: DiscordConfig,
     /// album id -> cover art URL, `None` when the album has no MusicBrainz ID.
     /// Negative results are cached too, so we do not re-query for the ~90% of
@@ -177,20 +179,42 @@ impl Presence {
             }
 
             let image = self.art_url(&song).await;
-            let state = format!("{} · {}", song.artist_or_unknown(), song.album_or_unknown());
 
-            // `large_url` makes the album art itself clickable.
-            let mut assets = Assets::new()
-                .large_text(song.album_or_unknown())
-                .large_url(REPO_URL);
-            assets = match image.as_deref() {
-                Some(url) => assets.large_image(url),
-                None => assets.large_image(FALLBACK_IMAGE),
+            let (clean_artist, clean_album) = parse_clean_artist_album(&song);
+            let mut clean_title = clean_track_title(&song.title);
+
+            // Deduplicate: If clean_title contains "Artist - ", strip out "Artist - "
+            if let Some(ref artist) = clean_artist {
+                if let Some(pos) = clean_title.find(" - ") {
+                    let left = clean_title[..pos].trim();
+                    if left.eq_ignore_ascii_case(artist) {
+                        clean_title = clean_title[pos + 3..].trim().to_string();
+                    }
+                }
+            }
+
+            let details = clean_title;
+            let state = match (&clean_artist, &clean_album) {
+                (Some(a), Some(alb)) if !a.is_empty() && !alb.is_empty() && a != alb => {
+                    format!("{a} · {alb}")
+                }
+                (Some(a), _) if !a.is_empty() => a.clone(),
+                (_, Some(alb)) if !alb.is_empty() => alb.clone(),
+                _ => "Wander".to_string(),
             };
+
+            let hover_text = clean_album.as_deref().unwrap_or(song.album_or_unknown());
+
+            let mut assets = Assets::new().large_text(hover_text);
+            if let Some(url) = image.as_deref() {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    assets = assets.large_image(url).large_url(REPO_URL);
+                }
+            }
 
             let mut activity = Activity::new()
                 .activity_type(ActivityType::Listening)
-                .details(song.title.as_str())
+                .details(details.as_str())
                 .state(state.as_str())
                 .assets(assets)
                 .buttons(vec![Button::new(REPO_BUTTON_LABEL, REPO_URL)]);
@@ -218,62 +242,53 @@ impl Presence {
         }
     }
 
-    /// Public cover art URL for a song's album, if one can be derived safely.
-    ///
-    /// Two sources, in order of reliability:
-    ///
-    /// 1. `getAlbumInfo2`, which on a server with Last.fm configured returns
-    ///    ready-made public image URLs;
-    /// 2. the Cover Art Archive, keyed by the album's MusicBrainz release ID.
-    ///
-    /// Many libraries — game soundtracks especially — have neither, in which
-    /// case there is genuinely no image that can be shared without leaking a
-    /// credential-bearing Navidrome URL. `self.diagnostic` records which case
-    /// applied so Settings can explain the blank frame.
     async fn art_url(&mut self, song: &crate::subsonic::models::Song) -> Option<String> {
         if !self.config.cover_art {
             self.report("disabled in config");
             return None;
         }
-        let Some(album_id) = song.album_id.as_deref() else {
-            self.report("track has no album id");
-            return None;
-        };
 
-        if let Some(cached) = self.art.get(album_id) {
+        let cache_key = song.id.clone();
+        if let Some(cached) = self.art.get(&cache_key) {
             return cached.clone();
         }
 
-        let info = match self.library.album_info(album_id).await {
-            Ok(info) => info,
-            // A network blip must not poison the cache for the whole session,
-            // so return without recording a negative result.
-            Err(err) => {
-                self.report(&format!("lookup failed: {err:#}"));
-                return None;
+        // 1. Try Subsonic album info & MusicBrainz CAA
+        if let Some(album_id) = song.album_id.as_deref() {
+            if let Ok(info) = self.library.album_info(album_id).await {
+                let url = info
+                    .large_image_url
+                    .or(info.medium_image_url)
+                    .filter(|url| url.starts_with("https://"))
+                    .or_else(|| {
+                        info.music_brainz_id
+                            .as_deref()
+                            .filter(|mbid| !mbid.trim().is_empty())
+                            .map(|mbid| format!("https://coverartarchive.org/release/{mbid}/front-250"))
+                    })
+                    .filter(|url| is_safe_to_share(url));
+
+                if let Some(u) = url {
+                    self.art.insert(cache_key, Some(u.clone()));
+                    return Some(u);
+                }
             }
-        };
-
-        let url = info
-            .large_image_url
-            .or(info.medium_image_url)
-            .filter(|url| url.starts_with("https://"))
-            .or_else(|| {
-                info.music_brainz_id
-                    .as_deref()
-                    .filter(|mbid| !mbid.trim().is_empty())
-                    .map(|mbid| format!("https://coverartarchive.org/release/{mbid}/front-250"))
-            })
-            // Belt and braces: never hand out a URL carrying credentials, even
-            // if the construction above is changed later.
-            .filter(|url| is_safe_to_share(url));
-
-        match url.as_deref() {
-            Some(url) => self.report(url),
-            None => self.report("no public cover URL for this album"),
         }
-        self.art.insert(album_id.to_string(), url.clone());
-        url
+
+        // 2. Try iTunes Search API for public high-res cover art
+        let (clean_artist, _) = parse_clean_artist_album(song);
+        let clean_title = clean_track_title(&song.title);
+        let search_artist = clean_artist.as_deref().unwrap_or("");
+
+        if let Some(itunes_url) = fetch_itunes_cover(&self.http, search_artist, &clean_title).await {
+            self.art.insert(cache_key, Some(itunes_url.clone()));
+            return Some(itunes_url);
+        }
+
+        // 3. Fallback to official high-res public Wander logo URL
+        let fallback = Some("https://raw.githubusercontent.com/Kolbxyz/Wander/main/assets/cover.png".to_string());
+        self.art.insert(cache_key, fallback.clone());
+        fallback
     }
 
     fn report(&self, message: &str) {
@@ -281,6 +296,22 @@ impl Presence {
             *diagnostic = message.to_string();
         }
     }
+}
+
+async fn fetch_itunes_cover(http: &reqwest::Client, artist: &str, title: &str) -> Option<String> {
+    let query = if artist.trim().is_empty() {
+        title.to_string()
+    } else {
+        format!("{artist} {title}")
+    };
+    let url = format!(
+        "https://itunes.apple.com/search?term={}&entity=song&limit=1",
+        urlencoding::encode(&query)
+    );
+    let resp = http.get(&url).send().await.ok()?;
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let artwork = json["results"][0]["artworkUrl100"].as_str()?;
+    Some(artwork.replace("100x100bb", "600x600bb"))
 }
 
 /// Guard against ever handing Discord a credential-bearing URL.
@@ -292,6 +323,87 @@ pub fn is_safe_to_share(url: &str) -> bool {
     !["?t=", "&t=", "?s=", "&s=", "?p=", "&p="]
         .iter()
         .any(|marker| lowered.contains(marker))
+}
+
+pub fn clean_track_title(title: &str) -> String {
+    let mut s = title.trim();
+    // Strip leading track numbers like "03. ", "01 - ", "1. "
+    if let Some(pos) = s.find(". ") {
+        let prefix = &s[..pos];
+        if prefix.chars().all(|c| c.is_ascii_digit()) && !prefix.is_empty() && prefix.len() <= 3 {
+            s = s[pos + 2..].trim();
+        }
+    } else if let Some(pos) = s.find(" - ") {
+        let prefix = &s[..pos];
+        if prefix.chars().all(|c| c.is_ascii_digit()) && !prefix.is_empty() && prefix.len() <= 3 {
+            s = s[pos + 3..].trim();
+        }
+    }
+    s.to_string()
+}
+
+pub fn clean_release_tag(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Strip bracketed tags like [UNBIASED], [FLAC], [16B-44.1kHz], [2012], etc.
+    while let Some(start) = result.find('[') {
+        if let Some(end) = result[start..].find(']') {
+            result.replace_range(start..start + end + 1, "");
+        } else {
+            break;
+        }
+    }
+
+    // Strip pipe tags like | SAO OP1 | ...
+    if let Some(pos) = result.find('|') {
+        result.truncate(pos);
+    }
+
+    // Strip parenthetical tags like (2012), (FLAC)
+    while let Some(start) = result.find('(') {
+        if let Some(end) = result[start..].find(')') {
+            let inside = &result[start + 1..start + end];
+            if inside.chars().all(|c| c.is_ascii_digit())
+                || inside.to_lowercase().contains("flac")
+                || inside.to_lowercase().contains("mp3")
+                || inside.to_lowercase().contains("mashup")
+            {
+                result.replace_range(start..start + end + 1, "");
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        text.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub fn parse_clean_artist_album(song: &crate::subsonic::models::Song) -> (Option<String>, Option<String>) {
+    let raw_artist = song.artist.as_deref().unwrap_or("");
+    let raw_album = song.album.as_deref().unwrap_or("");
+
+    if raw_artist == "Nyaa.si" || raw_artist.is_empty() {
+        let cleaned_album = clean_release_tag(raw_album);
+        if let Some(pos) = cleaned_album.find(" - ") {
+            let artist = cleaned_album[..pos].trim().to_string();
+            let album = cleaned_album[pos + 3..].trim().to_string();
+            return (Some(artist), Some(album));
+        } else {
+            return (None, Some(cleaned_album));
+        }
+    }
+
+    let artist = if raw_artist.is_empty() { None } else { Some(clean_release_tag(raw_artist)) };
+    let album = if raw_album.is_empty() { None } else { Some(clean_release_tag(raw_album)) };
+
+    (artist, album)
 }
 
 #[cfg(test)]
@@ -340,5 +452,21 @@ mod tests {
             cover_art: true,
         };
         assert!(config.client_id.trim().is_empty());
+    }
+
+    #[test]
+    fn cleans_track_title_prefix() {
+        assert_eq!(clean_track_title("03. LiSA - KiSS me PARADOX"), "LiSA - KiSS me PARADOX");
+        assert_eq!(clean_track_title("01 - Song Title"), "Song Title");
+        assert_eq!(clean_track_title("Simple Song"), "Simple Song");
+        assert_eq!(clean_track_title("Mr. Brightside"), "Mr. Brightside");
+        assert_eq!(clean_track_title("St. Anger"), "St. Anger");
+        assert_eq!(clean_track_title("Dr. Feelgood"), "Dr. Feelgood");
+    }
+
+    #[test]
+    fn cleans_torrent_release_tags() {
+        let tag = "[UNBIASED] LiSA - crossing field (2012) [FLAC] [16B-44.1kHz] | SAO OP1 | SWORD ART ONLINE OPENING";
+        assert_eq!(clean_release_tag(tag), "LiSA - crossing field");
     }
 }

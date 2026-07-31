@@ -82,7 +82,7 @@ fn title_case(text: &str) -> String {
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
     let rows = Layout::vertical([
-        Constraint::Length(6), // mixes
+        Constraint::Length(4), // mixes (2 lines of content + borders)
         Constraint::Length(9), // summary + top lists
         Constraint::Min(6),    // charts
     ])

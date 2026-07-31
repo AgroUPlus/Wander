@@ -246,6 +246,164 @@ impl App {
                     self.lyrics_scroll = 0.0;
                 }
             }
+            LoadEvent::ArchiveResults(result) => {
+                self.archive_plugin.searching = false;
+                match result {
+                    Ok(items) => {
+                        self.archive_plugin.results = items;
+                        self.archive_plugin.selection.reset();
+                        // A new result set makes the old track lists dead
+                        // weight; dropping them keeps the cache bounded by one
+                        // search rather than by the session.
+                        self.archive_plugin.files.clear();
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Archive search error: {err}"));
+                    }
+                }
+            }
+            LoadEvent::JamendoResults(result) => {
+                self.jamendo_plugin.searching = false;
+                match result {
+                    Ok(tracks) => {
+                        self.jamendo_plugin.results = tracks;
+                        self.jamendo_plugin.selection.reset();
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Jamendo search error: {err}"));
+                    }
+                }
+            }
+            LoadEvent::JamendoDownloadFinished { title, result } => {
+                self.jamendo_plugin.working = false;
+                match result {
+                    Ok(path) => {
+                        self.status_message = Some(format!(
+                            "Downloaded '{}' to {}",
+                            crate::ui::widgets::truncate(&title, 35),
+                            path.display()
+                        ));
+                        self.rescan_local_library();
+                    }
+                    Err(err) => {
+                        self.status_message =
+                            Some(format!("Jamendo download failed for '{title}': {err}"));
+                    }
+                }
+            }
+            LoadEvent::ArchiveItemFiles { identifier, files } => {
+                self.archive_plugin.pending.remove(&identifier);
+                self.archive_plugin.files.insert(identifier, files);
+            }
+            LoadEvent::ArchiveStreamReady(result) => {
+                self.archive_plugin.working = false;
+                match result {
+                    Ok(songs) => {
+                        if songs.is_empty() {
+                            self.status_message =
+                                Some("No playable audio in this Archive item".to_string());
+                            return;
+                        }
+                        let first_title = songs[0].title.clone();
+                        let count = songs.len();
+                        self.snapshot_queue();
+                        self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
+                        self.status_message = Some(format!(
+                            "Streaming '{}' ({count} track(s) from archive.org)",
+                            crate::ui::widgets::truncate(&first_title, 35)
+                        ));
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Archive streaming error: {err}"));
+                    }
+                }
+            }
+            LoadEvent::ArchiveDownloadFinished { title, result } => {
+                self.archive_plugin.working = false;
+                match result {
+                    Ok(path) => {
+                        self.status_message = Some(format!(
+                            "Downloaded '{}' to {}",
+                            crate::ui::widgets::truncate(&title, 35),
+                            path.display()
+                        ));
+                        self.rescan_local_library();
+                    }
+                    Err(err) => {
+                        self.status_message =
+                            Some(format!("Archive download failed for '{title}': {err}"));
+                    }
+                }
+            }
+            LoadEvent::PluginStatus(message) => {
+                self.status_message = Some(message);
+            }
+            #[cfg(feature = "nyaa")]
+            LoadEvent::NyaaResults(result) => {
+                self.nyaa_plugin.searching = false;
+                match result {
+                    Ok(items) => {
+                        self.nyaa_plugin.results = items;
+                        self.nyaa_plugin.selection.reset();
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Nyaa search error: {err}"));
+                    }
+                }
+            }
+            #[cfg(feature = "nyaa")]
+            LoadEvent::NyaaStreamReady(result) => {
+                self.nyaa_plugin.downloading = false;
+                match result {
+                    Ok(songs) => {
+                        if songs.is_empty() {
+                            self.status_message = Some("No audio tracks found to stream".to_string());
+                            return;
+                        }
+                        let first_title = songs[0].title.clone();
+                        let count = songs.len();
+                        self.snapshot_queue();
+                        self.player.send(PlayerCommand::PlayNow {
+                            songs,
+                            index: 0,
+                        });
+                        self.status_message = Some(format!(
+                            "Streaming '{}' ({count} track(s) queued in Wander)",
+                            crate::ui::widgets::truncate(&first_title, 35)
+                        ));
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Streaming error: {err}"));
+                    }
+                }
+            }
+            #[cfg(feature = "nyaa")]
+            LoadEvent::NyaaDownloadFinished { title, result } => {
+                self.nyaa_plugin.downloading = false;
+                match result {
+                    Ok(path) => {
+                        let is_torrent = path.extension().map(|e| e == "torrent").unwrap_or(false);
+                        if is_torrent {
+                            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                            self.status_message = Some(format!(
+                                "Downloaded '{}.torrent' to {} (Opened in system client)",
+                                crate::ui::widgets::truncate(&title, 30),
+                                path.display()
+                            ));
+                        } else {
+                            self.status_message = Some(format!(
+                                "Downloaded '{}' to {}",
+                                crate::ui::widgets::truncate(&title, 35),
+                                path.display()
+                            ));
+                        }
+                        self.rescan_local_library();
+                    }
+                    Err(err) => {
+                        self.status_message = Some(format!("Download failed for '{title}': {err}"));
+                    }
+                }
+            }
             LoadEvent::Error(message) => {
                 self.status_message = Some(message);
             }

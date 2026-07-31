@@ -101,18 +101,52 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         frame.render_widget(Paragraph::new(lines), *column_area);
     }
 
+    let hint = if clipped {
+        "window too short — some bindings are hidden  ·  any key to close"
+    } else {
+        "any key to close"
+    };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            if clipped {
-                "window too short — some bindings are hidden  ·  any key to close"
-            } else {
-                "any key to close"
-            },
-            theme.dim(),
-        )))
-        .centered(),
+        Paragraph::new(source_legend(app, theme, hint, rows[1].width as usize)).centered(),
         rows[1],
     );
+}
+
+/// The footer: what each source badge means, then the close hint.
+///
+/// The badges appear on every track row, so the sheet the user opens to ask
+/// "what does this key do" is also where they can ask "what is that symbol".
+/// Dropped entirely when the row is too narrow to hold it beside the hint,
+/// since a half-drawn legend explains nothing.
+fn source_legend<'a>(
+    app: &App,
+    theme: &Theme,
+    hint: &'a str,
+    width: usize,
+) -> Line<'a> {
+    use crate::library::SongSource;
+
+    let glyphs = app.config.glyphs;
+    let sources = [SongSource::Local, SongSource::Server, SongSource::Online];
+
+    let legend_width: usize = sources
+        .iter()
+        .map(|source| 2 + source.label().chars().count() + 3)
+        .sum();
+    if width < legend_width + hint.chars().count() + 3 {
+        return Line::from(Span::styled(hint, theme.dim()));
+    }
+
+    let mut spans = Vec::new();
+    for source in sources {
+        spans.push(Span::styled(
+            super::widgets::source_glyph(source, glyphs),
+            super::widgets::source_style(source, theme),
+        ));
+        spans.push(Span::styled(format!(" {}   ", source.label()), theme.dim()));
+    }
+    spans.push(Span::styled(format!(" ·  {hint}"), theme.dim()));
+    Line::from(spans)
 }
 
 /// One rendered row of the sheet.

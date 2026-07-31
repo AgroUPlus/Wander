@@ -191,6 +191,107 @@ impl App {
                 ));
             }
 
+            #[cfg(feature = "nyaa")]
+            SettingItem::PluginNyaaEnabled => {
+                self.config.plugins.nyaa.enabled = !self.config.plugins.nyaa.enabled;
+                let _ = self.config.save();
+                // Leaving a disabled plugin as the active source strands the
+                // tab on a plugin the selector no longer lists.
+                if let Some(first) = OnlineSource::available(&self.config).first()
+                    && !OnlineSource::available(&self.config).contains(&self.online_source)
+                {
+                    self.online_source = *first;
+                }
+                self.status_message = Some(format!(
+                    "Online (Nyaa.si) Plugin: {}",
+                    if self.config.plugins.nyaa.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+            }
+
+            #[cfg(feature = "nyaa")]
+            SettingItem::PluginNyaaPrimaryAction => {
+                use crate::config::OnlinePrimaryAction;
+                self.config.plugins.nyaa.primary_action = match self.config.plugins.nyaa.primary_action {
+                    OnlinePrimaryAction::Stream => OnlinePrimaryAction::Download,
+                    OnlinePrimaryAction::Download => OnlinePrimaryAction::Stream,
+                };
+                let _ = self.config.save();
+                self.status_message = Some(format!(
+                    "Nyaa default action: {}",
+                    self.config.plugins.nyaa.primary_action.label()
+                ));
+            }
+
+            SettingItem::PluginArchiveEnabled => {
+                self.config.plugins.archive.enabled = !self.config.plugins.archive.enabled;
+                let _ = self.config.save();
+                // Leaving the disabled source selected would strand the tab on
+                // a plugin that is no longer meant to be reachable.
+                if let Some(first) = OnlineSource::available(&self.config).first()
+                    && !OnlineSource::available(&self.config).contains(&self.online_source)
+                {
+                    self.online_source = *first;
+                }
+                self.status_message = Some(format!(
+                    "Online (Internet Archive) plugin: {}",
+                    if self.config.plugins.archive.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+            }
+
+            SettingItem::PluginArchivePrimaryAction => {
+                use crate::config::OnlinePrimaryAction;
+                self.config.plugins.archive.primary_action =
+                    match self.config.plugins.archive.primary_action {
+                        OnlinePrimaryAction::Stream => OnlinePrimaryAction::Download,
+                        OnlinePrimaryAction::Download => OnlinePrimaryAction::Stream,
+                    };
+                let _ = self.config.save();
+                self.status_message = Some(format!(
+                    "Archive default action: {}",
+                    self.config.plugins.archive.primary_action.label()
+                ));
+            }
+
+            SettingItem::PluginJamendoEnabled => {
+                self.config.plugins.jamendo.enabled = !self.config.plugins.jamendo.enabled;
+                let _ = self.config.save();
+                if let Some(first) = OnlineSource::available(&self.config).first()
+                    && !OnlineSource::available(&self.config).contains(&self.online_source)
+                {
+                    self.online_source = *first;
+                }
+                self.status_message = Some(format!(
+                    "Online (Jamendo) plugin: {}",
+                    if self.config.plugins.jamendo.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+            }
+
+            SettingItem::PluginJamendoPrimaryAction => {
+                use crate::config::OnlinePrimaryAction;
+                self.config.plugins.jamendo.primary_action =
+                    match self.config.plugins.jamendo.primary_action {
+                        OnlinePrimaryAction::Stream => OnlinePrimaryAction::Download,
+                        OnlinePrimaryAction::Download => OnlinePrimaryAction::Stream,
+                    };
+                let _ = self.config.save();
+                self.status_message = Some(format!(
+                    "Jamendo default action: {}",
+                    self.config.plugins.jamendo.primary_action.label()
+                ));
+            }
+
             SettingItem::QueueColumn(index) => {
                 if let Some(column) = self.config.queue_columns.get_mut(index) {
                     let width = column.width as isize + delta * 5;
@@ -211,8 +312,13 @@ impl App {
             | SettingItem::ClearQueue
             | SettingItem::DiscordClientId
             | SettingItem::LrclibUrl
+            | SettingItem::PluginArchiveDownloadDir
+            | SettingItem::PluginJamendoClientId
+            | SettingItem::PluginJamendoDownloadDir
             | SettingItem::AddQueueColumn
             | SettingItem::ShowKeybindings => {}
+            #[cfg(feature = "nyaa")]
+            SettingItem::PluginNyaaDownloadDir => {}
         }
     }
 
@@ -247,6 +353,34 @@ impl App {
                     .unwrap_or_default(),
                 SettingItem::DiscordClientId => self.config.discord.client_id.clone(),
                 SettingItem::LrclibUrl => self.config.lyrics.lrclib_url.clone(),
+            #[cfg(feature = "nyaa")]
+            SettingItem::PluginNyaaDownloadDir => self
+                .config
+                .plugins
+                .nyaa
+                .download_dir
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+                SettingItem::PluginArchiveDownloadDir => self
+                    .config
+                    .plugins
+                    .archive
+                    .download_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                SettingItem::PluginJamendoClientId => {
+                    self.config.plugins.jamendo.client_id.clone()
+                }
+                SettingItem::PluginJamendoDownloadDir => self
+                    .config
+                    .plugins
+                    .jamendo
+                    .download_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
                 _ => String::new(),
             };
             self.settings_edit =
@@ -275,6 +409,7 @@ impl App {
                     ColumnKind::Length,
                     ColumnKind::Track,
                     ColumnKind::Year,
+                    ColumnKind::Source,
                 ];
                 if let Some(column) = self.config.queue_columns.get_mut(index) {
                     let current = KINDS.iter().position(|k| *k == column.kind).unwrap_or(0);
@@ -420,6 +555,29 @@ impl App {
                 self.config.lyrics.lrclib_url = value;
                 let _ = self.config.save();
                 self.status_message = Some("LRCLIB server URL saved".into());
+            }
+            #[cfg(feature = "nyaa")]
+            SettingItem::PluginNyaaDownloadDir => {
+                self.config.plugins.nyaa.download_dir = (!value.is_empty()).then(|| expand_home(&value));
+                let _ = self.config.save();
+                self.status_message = Some("Nyaa download path updated".into());
+            }
+            SettingItem::PluginArchiveDownloadDir => {
+                self.config.plugins.archive.download_dir =
+                    (!value.is_empty()).then(|| expand_home(&value));
+                let _ = self.config.save();
+                self.status_message = Some("Archive download path updated".into());
+            }
+            SettingItem::PluginJamendoClientId => {
+                self.config.plugins.jamendo.client_id = value.trim().to_string();
+                let _ = self.config.save();
+                self.status_message = Some("Jamendo client ID saved".into());
+            }
+            SettingItem::PluginJamendoDownloadDir => {
+                self.config.plugins.jamendo.download_dir =
+                    (!value.is_empty()).then(|| expand_home(&value));
+                let _ = self.config.save();
+                self.status_message = Some("Jamendo download path updated".into());
             }
             _ => {}
         }

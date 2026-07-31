@@ -27,11 +27,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &
     } else {
         " Lyrics ".to_string()
     };
+    let bg = theme.base();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.border(false))
-        .style(theme.base())
+        .style(bg)
         .title(title)
         .title_style(theme.title());
     let inner = block.inner(area);

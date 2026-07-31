@@ -51,6 +51,11 @@ pub enum Icon {
     /// Stands in for a lyric line with no words: an instrumental break should
     /// look deliberate rather than like the pane stopped working.
     LyricGap,
+    /// Where a track comes from: a file on this machine, the configured
+    /// server, or the internet.
+    SourceLocal,
+    SourceServer,
+    SourceOnline,
 }
 
 impl GlyphSet {
@@ -80,6 +85,9 @@ impl GlyphSet {
             (GlyphSet::Nerd, CoverMissing) => "󰎆",
             (GlyphSet::Nerd, Star) => "󰋑",
             (GlyphSet::Nerd, LyricGap) => "󰝚",
+            (GlyphSet::Nerd, SourceLocal) => "󰋊",
+            (GlyphSet::Nerd, SourceServer) => "󰒋",
+            (GlyphSet::Nerd, SourceOnline) => "󰖟",
 
             (GlyphSet::Unicode, Paused) => "⏸",
             (GlyphSet::Unicode, Stopped) => "■",
@@ -104,6 +112,9 @@ impl GlyphSet {
             (GlyphSet::Unicode, CoverMissing) => "♪",
             (GlyphSet::Unicode, Star) => "★",
             (GlyphSet::Unicode, LyricGap) => "♪",
+            (GlyphSet::Unicode, SourceLocal) => "▣",
+            (GlyphSet::Unicode, SourceServer) => "⌂",
+            (GlyphSet::Unicode, SourceOnline) => "☁",
 
             (GlyphSet::Ascii, Paused) => "=",
             (GlyphSet::Ascii, Stopped) => "#",
@@ -128,13 +139,16 @@ impl GlyphSet {
             (GlyphSet::Ascii, CoverMissing) => "-",
             (GlyphSet::Ascii, Star) => "*",
             (GlyphSet::Ascii, LyricGap) => "~",
+            (GlyphSet::Ascii, SourceLocal) => "L",
+            (GlyphSet::Ascii, SourceServer) => "N",
+            (GlyphSet::Ascii, SourceOnline) => "W",
         }
     }
 }
 
 /// Every icon the UI can ask for, so the tests can sweep them.
 #[cfg(test)]
-pub const ALL_ICONS: [Icon; 23] = [
+pub const ALL_ICONS: [Icon; 26] = [
     Icon::Paused,
     Icon::Stopped,
     Icon::Buffering,
@@ -158,6 +172,9 @@ pub const ALL_ICONS: [Icon; 23] = [
     Icon::CoverMissing,
     Icon::Star,
     Icon::LyricGap,
+    Icon::SourceLocal,
+    Icon::SourceServer,
+    Icon::SourceOnline,
 ];
 
 #[cfg(test)]

@@ -330,4 +330,690 @@ impl App {
             })
         });
     }
+
+    // ---- Plugin jobs ----------------------------------------------------
+
+    /// Stop whatever a plugin is currently fetching.
+    pub(crate) fn cancel_plugin_job(&mut self) {
+        if let Some(job) = self.plugin_job.take() {
+            job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            job.handle.abort();
+        }
+    }
+
+    /// Run a plugin fetch, cancelling any fetch already in flight.
+    pub(crate) fn start_plugin_job<F>(
+        &mut self,
+        cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        future: F,
+    ) where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.cancel_plugin_job();
+        self.plugin_job = Some(PluginJob {
+            handle: tokio::spawn(future),
+            cancel,
+        });
+    }
+
+    // ---- Online source switching ---------------------------------------
+
+    /// Move to the next enabled online plugin. A no-op when only one is on.
+    pub(crate) fn cycle_online_source(&mut self) {
+        let sources = OnlineSource::available(&self.config);
+        if sources.len() < 2 {
+            self.status_message =
+                Some("Only one online plugin is enabled (see Settings ▸ Plugins)".to_string());
+            return;
+        }
+        let current = sources
+            .iter()
+            .position(|s| *s == self.online_source)
+            .unwrap_or(0);
+        self.set_online_source(sources[(current + 1) % sources.len()]);
+    }
+
+    /// Put the cursor in the active plugin's search box.
+    pub(crate) fn focus_online_search(&mut self) {
+        match self.online_source {
+            #[cfg(feature = "nyaa")]
+            OnlineSource::Nyaa => self.nyaa_plugin.editing_query = true,
+            OnlineSource::Archive => self.archive_plugin.editing_query = true,
+            OnlineSource::Jamendo => self.jamendo_plugin.editing_query = true,
+        }
+    }
+
+    /// Step the active plugin's filter — the box each one puts beside its
+    /// search field. The nyaa box has always invited a click; now there is
+    /// something behind it.
+    pub(crate) fn cycle_online_filter(&mut self) {
+        match self.online_source {
+            #[cfg(feature = "nyaa")]
+            OnlineSource::Nyaa => self.cycle_nyaa_category(),
+            OnlineSource::Archive => self.cycle_archive_collection(),
+            OnlineSource::Jamendo => self.cycle_jamendo_format(),
+        }
+    }
+
+    /// Show a particular online plugin in the Online tab.
+    pub(crate) fn set_online_source(&mut self, source: OnlineSource) {
+        self.online_source = source;
+        // The plugins share Pane::Online, so a stale cursor from the previous
+        // source would point past the end of this one's results.
+        let len = self.pane_len(Pane::Online);
+        self.selection_mut(Pane::Online).clamp(len);
+        self.status_message = Some(format!("Online source: {}", source.title()));
+    }
+
+    // ---- Internet Archive Plugin ---------------------------------------
+
+    pub(crate) fn search_archive(&mut self, query: String) {
+        if query.trim().is_empty() {
+            self.status_message = Some("Enter a search query first".to_string());
+            return;
+        }
+        self.archive_plugin.query = query.clone();
+        self.archive_plugin.searching = true;
+        self.status_message = Some(format!("Searching archive.org for '{}'...", query));
+
+        let http = self.http.clone();
+        let collection = crate::plugins::archive::ArchiveCollection::from_code(
+            &self.config.plugins.archive.collection,
+        );
+        let loads = self.loads.clone();
+
+        tokio::spawn(async move {
+            let res = crate::plugins::archive::api::search_archive(&http, &query, collection)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = loads.send(LoadEvent::ArchiveResults(res));
+        });
+    }
+
+    /// Fetch the highlighted item's metadata, once, in the background.
+    ///
+    /// Called every frame from the main loop: the length column has to fill in
+    /// as the cursor moves, and there is no single place a selection changes
+    /// (keys, mouse clicks and a fresh search all move it). The cache and the
+    /// in-flight set keep this to one request per item ever, and the result is
+    /// what streaming and downloading use, so it is never wasted work.
+    pub fn sync_archive_metadata(&mut self) {
+        if self.tab != Tab::Online || self.online_source != OnlineSource::Archive {
+            return;
+        }
+        let Some(identifier) = self
+            .archive_plugin
+            .selected_item()
+            .map(|item| item.identifier.clone())
+        else {
+            return;
+        };
+        if self.archive_plugin.files.contains_key(&identifier)
+            || self.archive_plugin.pending.contains(&identifier)
+        {
+            return;
+        }
+
+        self.archive_plugin.pending.insert(identifier.clone());
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+        tokio::spawn(async move {
+            let files = crate::plugins::archive::api::item_files(&http, &identifier)
+                .await
+                .ok();
+            let _ = loads.send(LoadEvent::ArchiveItemFiles { identifier, files });
+        });
+    }
+
+    pub(crate) fn cycle_archive_collection(&mut self) {
+        use crate::plugins::archive::ArchiveCollection;
+        let collections = ArchiveCollection::ALL;
+        let current = ArchiveCollection::from_code(&self.config.plugins.archive.collection);
+        let idx = collections.iter().position(|c| *c == current).unwrap_or(0);
+        let next = collections[(idx + 1) % collections.len()];
+        self.config.plugins.archive.collection = next.code().to_string();
+        let _ = self.config.save();
+        self.status_message = Some(format!("Archive collection set to: {}", next.label()));
+
+        if !self.archive_plugin.query.is_empty() {
+            let query = self.archive_plugin.query.clone();
+            self.search_archive(query);
+        }
+    }
+
+    /// Queue an Archive item's tracks and start playing.
+    ///
+    /// Archive serves plain range-capable HTTPS, so the player streams the
+    /// files straight from the URL — nothing is written to disk.
+    pub(crate) fn stream_selected_archive_item(&mut self) {
+        let Some(item) = self.archive_plugin.selected_item().cloned() else {
+            self.status_message = Some("No item selected to stream".to_string());
+            return;
+        };
+
+        self.archive_plugin.working = true;
+        self.status_message = Some(format!(
+            "Resolving tracks for '{}'...",
+            crate::ui::widgets::truncate(&item.title, 35)
+        ));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+        // Usually already fetched for the length column, so Enter plays
+        // without a round trip.
+        let cached = self
+            .archive_plugin
+            .files
+            .get(&item.identifier)
+            .cloned()
+            .flatten();
+
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.start_plugin_job(cancel, async move {
+            let files = match cached {
+                Some(files) => files,
+                None => match crate::plugins::archive::api::item_files(&http, &item.identifier)
+                    .await
+                {
+                    Ok(files) => files,
+                    Err(err) => {
+                        let _ = loads.send(LoadEvent::ArchiveStreamReady(Err(format!("{err:#}"))));
+                        return;
+                    }
+                },
+            };
+
+            let songs: Vec<Song> = files
+                .iter()
+                .enumerate()
+                .map(|(idx, file)| Song {
+                    id: file.stream_url(&item.identifier),
+                    title: file.title.clone(),
+                    album: Some(item.title.clone()),
+                    album_id: None,
+                    artist: Some(if item.creator.is_empty() {
+                        "Internet Archive".to_string()
+                    } else {
+                        item.creator.clone()
+                    }),
+                    artist_id: None,
+                    // Archive renders a thumbnail for every item at a stable
+                    // URL, so online tracks get artwork like anything else.
+                    cover_art: Some(format!(
+                        "https://archive.org/services/img/{}",
+                        urlencoding::encode(&item.identifier)
+                    )),
+                    duration: file.duration as u32,
+                    bit_rate: 0,
+                    track: Some(file.track.unwrap_or((idx + 1) as u32)),
+                    year: item.year.parse().ok(),
+                    genre: None,
+                    suffix: file.suffix(),
+                    content_type: None,
+                    size: file.size,
+                    starred: None,
+                    user_rating: None,
+                    play_count: 0,
+                    genres: Vec::new(),
+                    moods: Vec::new(),
+                })
+                .collect();
+
+            let _ = loads.send(LoadEvent::ArchiveStreamReady(Ok(songs)));
+        });
+    }
+
+    pub(crate) fn download_selected_archive_item(&mut self) {
+        let Some(item) = self.archive_plugin.selected_item().cloned() else {
+            self.status_message = Some("No item selected to download".to_string());
+            return;
+        };
+
+        let target_dir = self.online_download_dir(
+            self.config.plugins.archive.download_dir.clone(),
+        );
+
+        self.archive_plugin.working = true;
+        self.status_message = Some(format!(
+            "Downloading '{}'...",
+            crate::ui::widgets::truncate(&item.title, 35)
+        ));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+        let cached = self
+            .archive_plugin
+            .files
+            .get(&item.identifier)
+            .cloned()
+            .flatten();
+
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.start_plugin_job(cancel, async move {
+            let result = async {
+                let files = match cached {
+                    Some(files) => files,
+                    None => crate::plugins::archive::api::item_files(&http, &item.identifier).await?,
+                };
+                crate::plugins::archive::downloader::download_archive_item(
+                    &http,
+                    &item,
+                    &files,
+                    &target_dir,
+                    |_, _, _| {},
+                )
+                .await
+            }
+            .await
+            .map_err(|e| format!("{e:#}"));
+
+            let _ = loads.send(LoadEvent::ArchiveDownloadFinished {
+                title: item.title,
+                result,
+            });
+        });
+    }
+
+    /// Where an online plugin saves files: its own setting, else the first
+    /// local library root (so downloads show up in the library), else Music.
+    pub(crate) fn online_download_dir(
+        &self,
+        configured: Option<std::path::PathBuf>,
+    ) -> std::path::PathBuf {
+        if let Some(dir) = configured {
+            return dir;
+        }
+        if let Some(first_local) = self.config.local.paths.first() {
+            return first_local.clone();
+        }
+        directories::UserDirs::new()
+            .and_then(|ud| ud.audio_dir().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::path::PathBuf::from("./downloads"))
+    }
+
+    // ---- Jamendo Plugin -------------------------------------------------
+
+    pub(crate) fn search_jamendo(&mut self, query: String) {
+        if query.trim().is_empty() {
+            self.status_message = Some("Enter a search query first".to_string());
+            return;
+        }
+        self.jamendo_plugin.query = query.clone();
+        self.jamendo_plugin.searching = true;
+        self.status_message = Some(format!("Searching Jamendo for '{}'...", query));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+        let client_id = self.config.plugins.jamendo.client_id.clone();
+        let format =
+            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
+
+        tokio::spawn(async move {
+            let res =
+                crate::plugins::jamendo::api::search_jamendo(&http, &client_id, &query, format)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+            let _ = loads.send(LoadEvent::JamendoResults(res));
+        });
+    }
+
+    pub(crate) fn cycle_jamendo_format(&mut self) {
+        use crate::plugins::jamendo::JamendoFormat;
+        let formats = JamendoFormat::ALL;
+        let current = JamendoFormat::from_code(&self.config.plugins.jamendo.format);
+        let idx = formats.iter().position(|f| *f == current).unwrap_or(0);
+        let next = formats[(idx + 1) % formats.len()];
+        self.config.plugins.jamendo.format = next.code().to_string();
+        let _ = self.config.save();
+        self.status_message = Some(format!("Jamendo format set to: {}", next.label()));
+
+        // The stream URLs embed the format, so old results point at the old one.
+        if !self.jamendo_plugin.query.is_empty() {
+            let query = self.jamendo_plugin.query.clone();
+            self.search_jamendo(query);
+        }
+    }
+
+    /// Convert one search result into a queueable track.
+    fn jamendo_song(&self, track: &crate::plugins::jamendo::JamendoTrack) -> Song {
+        let format =
+            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
+        Song {
+            id: track.audio.clone(),
+            title: track.name.clone(),
+            album: (!track.album_name.is_empty()).then(|| track.album_name.clone()),
+            album_id: None,
+            artist: Some(track.artist_name.clone()),
+            artist_id: None,
+            cover_art: track.image.clone(),
+            duration: track.duration,
+            bit_rate: 0,
+            track: None,
+            year: track.release_year,
+            genre: None,
+            suffix: Some(format.suffix().to_string()),
+            content_type: None,
+            size: 0,
+            starred: None,
+            user_rating: None,
+            play_count: 0,
+            genres: Vec::new(),
+            moods: Vec::new(),
+        }
+    }
+
+    /// Play the highlighted track, and queue the rest of the results behind it.
+    ///
+    /// A search returns a whole listful of songs; queueing only the one that
+    /// was highlighted would throw the other ninety-nine away.
+    pub(crate) fn stream_selected_jamendo_track(&mut self) {
+        if self.jamendo_plugin.results.is_empty() {
+            self.status_message = Some("No track selected to play".to_string());
+            return;
+        }
+
+        let index = self
+            .jamendo_plugin
+            .selection
+            .index
+            .min(self.jamendo_plugin.results.len() - 1);
+        let songs: Vec<Song> = self
+            .jamendo_plugin
+            .results
+            .iter()
+            .map(|track| self.jamendo_song(track))
+            .collect();
+        let title = songs[index].title.clone();
+        let count = songs.len();
+
+        self.snapshot_queue();
+        self.player.send(PlayerCommand::PlayNow { songs, index });
+        self.status_message = Some(format!(
+            "Playing '{}' ({count} track(s) queued from Jamendo)",
+            crate::ui::widgets::truncate(&title, 35)
+        ));
+    }
+
+    pub(crate) fn download_selected_jamendo_track(&mut self) {
+        let Some(track) = self.jamendo_plugin.selected_track().cloned() else {
+            self.status_message = Some("No track selected to download".to_string());
+            return;
+        };
+        let Some(url) = track.audiodownload.clone() else {
+            self.status_message =
+                Some("This artist does not allow downloads of this track".to_string());
+            return;
+        };
+
+        let target_dir =
+            self.online_download_dir(self.config.plugins.jamendo.download_dir.clone());
+        let format =
+            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
+        let file_name = format!(
+            "{} - {}.{}",
+            crate::plugins::sanitize_filename(&track.artist_name),
+            crate::plugins::sanitize_filename(&track.name),
+            format.suffix()
+        );
+
+        self.jamendo_plugin.working = true;
+        self.status_message = Some(format!(
+            "Downloading '{}'...",
+            crate::ui::widgets::truncate(&track.name, 35)
+        ));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+        let title = track.name.clone();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        self.start_plugin_job(cancel, async move {
+            let result = async {
+                tokio::fs::create_dir_all(&target_dir).await?;
+                let response = http.get(&url).send().await?;
+                if !response.status().is_success() {
+                    anyhow::bail!("Jamendo returned HTTP {}", response.status());
+                }
+                let bytes = response.bytes().await?;
+                let target = target_dir.join(&file_name);
+                tokio::fs::write(&target, &bytes).await?;
+                Ok::<std::path::PathBuf, anyhow::Error>(target)
+            }
+            .await
+            .map_err(|e| format!("{e:#}"));
+
+            let _ = loads.send(LoadEvent::JamendoDownloadFinished { title, result });
+        });
+    }
+
+    // ---- Nyaa Online Plugin --------------------------------------------
+
+    #[cfg(feature = "nyaa")]
+    pub(crate) fn search_nyaa(&mut self, query: String) {
+        if query.trim().is_empty() {
+            self.status_message = Some("Enter a search query first".to_string());
+            return;
+        }
+        self.nyaa_plugin.query = query.clone();
+        self.nyaa_plugin.searching = true;
+        self.status_message = Some(format!("Searching nyaa.si for '{}'...", query));
+
+        let http = self.http.clone();
+        let category = self.config.plugins.nyaa.category.clone();
+        let loads = self.loads.clone();
+
+        tokio::spawn(async move {
+            let res = crate::plugins::nyaa::api::search_nyaa(&http, &query, &category)
+                .await
+                .map_err(|e| format!("{e:#}"));
+            let _ = loads.send(LoadEvent::NyaaResults(res));
+        });
+    }
+
+    #[cfg(feature = "nyaa")]
+    pub(crate) fn cycle_nyaa_category(&mut self) {
+        use crate::plugins::nyaa::api::NyaaCategory;
+        let categories = NyaaCategory::ALL;
+        let current_code = &self.config.plugins.nyaa.category;
+        let current_idx = categories
+            .iter()
+            .position(|c| c.code() == current_code)
+            .unwrap_or(0);
+        let next_idx = (current_idx + 1) % categories.len();
+        let next_cat = categories[next_idx];
+        self.config.plugins.nyaa.category = next_cat.code().to_string();
+        let _ = self.config.save();
+        self.status_message = Some(format!("Nyaa category set to: {}", next_cat.label()));
+
+        if !self.nyaa_plugin.query.is_empty() {
+            let query = self.nyaa_plugin.query.clone();
+            self.search_nyaa(query);
+        }
+    }
+
+    #[cfg(feature = "nyaa")]
+    pub(crate) fn download_selected_nyaa_item(&mut self) {
+        let Some(item) = self.nyaa_plugin.selected_item().cloned() else {
+            self.status_message = Some("No item selected to download".to_string());
+            return;
+        };
+
+        let target_dir = if let Some(ref dir) = self.config.plugins.nyaa.download_dir {
+            dir.clone()
+        } else if let Some(first_local) = self.config.local.paths.first() {
+            first_local.clone()
+        } else {
+            let user_dirs = directories::UserDirs::new();
+            if let Some(ud) = user_dirs {
+                ud.audio_dir()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| std::path::PathBuf::from("./downloads"))
+            } else {
+                std::path::PathBuf::from("./downloads")
+            }
+        };
+
+        self.nyaa_plugin.downloading = true;
+        self.status_message = Some(format!(
+            "Downloading '{}'...",
+            crate::ui::widgets::truncate(&item.title, 35)
+        ));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.start_plugin_job(cancel, async move {
+            let res = crate::plugins::nyaa::downloader::download_nyaa_item(
+                &http,
+                &item,
+                &target_dir,
+            )
+            .await
+            .map_err(|e| format!("{e:#}"));
+
+            let _ = loads.send(LoadEvent::NyaaDownloadFinished {
+                title: item.title,
+                result: res,
+            });
+        });
+    }
+
+    #[cfg(feature = "nyaa")]
+    pub(crate) fn stream_selected_nyaa_item(&mut self) {
+        let Some(item) = self.nyaa_plugin.selected_item().cloned() else {
+            self.status_message = Some("No item selected to stream".to_string());
+            return;
+        };
+
+        self.nyaa_plugin.downloading = true;
+        self.status_message = Some(format!(
+            "Buffering/Streaming '{}'...",
+            crate::ui::widgets::truncate(&item.title, 35)
+        ));
+
+        let http = self.http.clone();
+        let loads = self.loads.clone();
+
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_job = std::sync::Arc::clone(&cancel);
+        self.start_plugin_job(cancel_job, async move {
+            let cache_dir = crate::paths::cache_dir()
+                .map(|p| p.join("stream_cache"))
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp/wander_stream"));
+
+            let download_res = crate::plugins::nyaa::downloader::download_nyaa_item(
+                &http,
+                &item,
+                &cache_dir,
+            )
+            .await;
+
+            match download_res {
+                Ok(path) => {
+                    let is_torrent = path.extension().map(|e| e == "torrent").unwrap_or(false);
+                    let audio_paths = if is_torrent {
+                        let progress = loads.clone();
+                        let title = item.title.clone();
+                        let report = move |bytes: u64| {
+                            let _ = progress.send(LoadEvent::PluginStatus(format!(
+                                "Downloading '{}' — {:.1} MB so far...",
+                                crate::ui::widgets::truncate(&title, 30),
+                                bytes as f64 / (1024.0 * 1024.0)
+                            )));
+                        };
+                        match crate::plugins::nyaa::downloader::extract_torrent_audio(
+                            &path,
+                            &cache_dir,
+                            &cancel,
+                            report,
+                        )
+                        .await
+                        {
+                            Ok(paths) => paths,
+                            Err(e) => {
+                                let _ = loads.send(LoadEvent::NyaaStreamReady(Err(format!("{e:#}"))));
+                                return;
+                            }
+                        }
+                    } else {
+                        vec![path]
+                    };
+
+                    // The files are already on disk, so their own tags are
+                    // the best source for the length and the track names —
+                    // a torrent's filenames rarely are.
+                    //
+                    // Parsing them is blocking work on a two-worker runtime
+                    // that also drives the UI, so it goes to a blocking thread.
+                    let probe_paths = audio_paths.clone();
+                    let probed: Vec<crate::plugins::ProbedTags> =
+                        tokio::task::spawn_blocking(move || {
+                            probe_paths
+                                .iter()
+                                .map(|p| crate::plugins::probe_audio(p))
+                                .collect()
+                        })
+                        .await
+                        .unwrap_or_default();
+                    let songs: Vec<Song> = audio_paths
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, p)| {
+                            let probed = probed.get(idx).cloned().unwrap_or_default();
+                            let track_title = probed.title.clone().unwrap_or_else(|| {
+                                p.file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| format!("Track {}", idx + 1))
+                            });
+                            let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+
+                            Song {
+                                // Cached under the plugin's own prefix, not
+                                // "local:": it plays off disk, but it is not
+                                // part of the user's library.
+                                id: format!(
+                                    "{}{}",
+                                    crate::library::ONLINE_PREFIX,
+                                    p.display()
+                                ),
+                                title: track_title,
+                                album: Some(probed.album.clone().unwrap_or_else(|| item.title.clone())),
+                                album_id: None,
+                                artist: Some(
+                                    probed.artist.clone().unwrap_or_else(|| "Nyaa.si".to_string()),
+                                ),
+                                artist_id: None,
+                                // Points at the cached file itself, which is
+                                // where its embedded artwork lives.
+                                cover_art: Some(format!(
+                                    "{}{}",
+                                    crate::library::ONLINE_PREFIX,
+                                    p.display()
+                                )),
+                                duration: probed.duration,
+                                bit_rate: probed.bit_rate,
+                                track: Some(probed.track.unwrap_or((idx + 1) as u32)),
+                                year: probed.year,
+                                genre: Some("Anime / OST".to_string()),
+                                suffix: p.extension().map(|e| e.to_string_lossy().to_string()),
+                                content_type: None,
+                                size,
+                                starred: None,
+                                user_rating: None,
+                                play_count: 0,
+                                genres: Vec::new(),
+                                moods: Vec::new(),
+                            }
+                        })
+                        .collect();
+
+                    let _ = loads.send(LoadEvent::NyaaStreamReady(Ok(songs)));
+                }
+                Err(err) => {
+                    let _ = loads.send(LoadEvent::NyaaStreamReady(Err(format!("{err:#}"))));
+                }
+            }
+        });
+    }
 }

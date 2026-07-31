@@ -24,10 +24,119 @@ pub struct Config {
     pub discord: DiscordConfig,
     pub local: LocalConfig,
     pub lyrics: LyricsConfig,
+    pub plugins: PluginsConfig,
     /// Key overrides, e.g. `"ctrl+p" = "open_palette"`. `"none"` unbinds a key.
     /// Anything not listed keeps its default binding.
     #[serde(default)]
     pub keys: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    #[cfg(feature = "nyaa")]
+    pub nyaa: NyaaConfig,
+    pub archive: ArchiveConfig,
+    pub jamendo: JamendoConfig,
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            #[cfg(feature = "nyaa")]
+            nyaa: NyaaConfig::default(),
+            archive: ArchiveConfig::default(),
+            jamendo: JamendoConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnlinePrimaryAction {
+    Stream,
+    Download,
+}
+
+impl OnlinePrimaryAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stream => "Stream (Play Now)",
+            Self::Download => "Download to local library",
+        }
+    }
+}
+
+#[cfg(feature = "nyaa")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NyaaConfig {
+    pub enabled: bool,
+    pub download_dir: Option<PathBuf>,
+    pub category: String,
+    pub primary_action: OnlinePrimaryAction,
+}
+
+#[cfg(feature = "nyaa")]
+impl Default for NyaaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            download_dir: None,
+            category: "2_0".to_string(),
+            primary_action: OnlinePrimaryAction::Stream,
+        }
+    }
+}
+
+/// Internet Archive plugin: legal streaming and downloads of the audio
+/// collections archive.org hosts (live music, netlabels, 78 RPM transfers).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchiveConfig {
+    pub enabled: bool,
+    pub download_dir: Option<PathBuf>,
+    /// Collection code from `ArchiveCollection::code`, e.g. `etree`.
+    pub collection: String,
+    pub primary_action: OnlinePrimaryAction,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            download_dir: None,
+            collection: "audio".to_string(),
+            primary_action: OnlinePrimaryAction::Stream,
+        }
+    }
+}
+
+/// Jamendo plugin: a general music catalogue of freely licensed tracks.
+///
+/// Needs a free client ID from <https://devportal.jamendo.com>; the API
+/// rejects anonymous requests, so the plugin can do nothing without one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JamendoConfig {
+    pub enabled: bool,
+    pub client_id: String,
+    pub download_dir: Option<PathBuf>,
+    /// Format code from `JamendoFormat::code`.
+    pub format: String,
+    pub primary_action: OnlinePrimaryAction,
+}
+
+impl Default for JamendoConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            client_id: String::new(),
+            download_dir: None,
+            format: "flac".to_string(),
+            primary_action: OnlinePrimaryAction::Stream,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +177,7 @@ impl Default for Config {
             discord: DiscordConfig::default(),
             local: LocalConfig::default(),
             lyrics: LyricsConfig::default(),
+            plugins: PluginsConfig::default(),
             keys: std::collections::HashMap::new(),
         }
     }
@@ -172,6 +282,8 @@ pub enum ColumnKind {
     Length,
     Track,
     Year,
+    /// Where the track comes from: local file, server, or online plugin.
+    Source,
 }
 
 impl ColumnKind {
@@ -183,6 +295,7 @@ impl ColumnKind {
             Self::Length => "Len",
             Self::Track => "#",
             Self::Year => "Year",
+            Self::Source => "Src",
         }
     }
 }
@@ -205,6 +318,10 @@ impl Column {
             Self {
                 kind: ColumnKind::Length,
                 width: 10,
+            },
+            Self {
+                kind: ColumnKind::Source,
+                width: 5,
             },
         ]
     }

@@ -6,6 +6,7 @@ mod keymap;
 mod library;
 mod paths;
 mod player;
+mod plugins;
 mod subsonic;
 mod theme;
 mod ui;
@@ -25,7 +26,7 @@ use ui::cover::CoverRenderer;
 /// redraw at all; it waits for an event instead.
 const TICK: Duration = Duration::from_millis(50);
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     let config = config::Config::load()?;
     // Problems that used to be fatal are now shown in the status line, since
@@ -327,6 +328,9 @@ async fn run(
 
     loop {
         app.sync_cover();
+        // Fills the Online tab's length column for whatever is highlighted,
+        // and warms the metadata the same item needs to play.
+        app.sync_archive_metadata();
         // Deferred disk writes land here, at most once a second, so nothing in
         // the input path ever blocks on the filesystem.
         app.flush_state(false);

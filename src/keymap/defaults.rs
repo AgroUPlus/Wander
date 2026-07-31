@@ -30,7 +30,9 @@ impl Default for Keymap {
         bind(KeyCode::Char('b'), a, JumpToAlbum);
         bind(KeyCode::Char('C'), s, ClearQueue);
         bind(KeyCode::Backspace, n, TabBack);
-        for i in 1..=4u8 {
+        // One binding per tab that can exist. Enabling an online plugin adds a
+        // tab, which used to push Settings to a fifth slot that no key reached.
+        for i in 1..=crate::app::Tab::ALL.len() as u8 {
             bind(KeyCode::Char((b'0' + i) as char), n, Tab(i as usize - 1));
         }
 

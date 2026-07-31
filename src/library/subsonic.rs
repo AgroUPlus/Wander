@@ -46,6 +46,7 @@ impl Library for SubsonicLibrary {
                 .client
                 .stream_url(&song.id, song.suffix.as_deref(), offset, force_transcode),
             http: self.client.http().clone(),
+            starts_at: offset,
         })
     }
 

@@ -35,12 +35,58 @@ pub const LOCAL_ALBUM_PREFIX: &str = "local-album:";
 pub const LOCAL_ARTIST_PREFIX: &str = "local-artist:";
 pub const LOCAL_PLAYLIST_PREFIX: &str = "local-playlist:";
 
+/// Prefix marking a file an online plugin fetched into the cache.
+///
+/// These play from a path like a local track, but they are not part of the
+/// user's library and must not be presented as if they were, so they carry
+/// their own prefix rather than reusing `local:`.
+pub const ONLINE_PREFIX: &str = "online:";
+
 /// Whether an id was minted by the local backend.
 pub fn is_local_id(id: &str) -> bool {
     id.starts_with(LOCAL_PREFIX)
         || id.starts_with(LOCAL_ALBUM_PREFIX)
         || id.starts_with(LOCAL_ARTIST_PREFIX)
         || id.starts_with(LOCAL_PLAYLIST_PREFIX)
+}
+
+/// Where a track's audio comes from, as shown to the user.
+///
+/// Derived from the id alone: every backend already encodes its provenance
+/// there, so nothing has to be threaded through the queue or the player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SongSource {
+    /// A file in one of the user's own music folders.
+    Local,
+    /// Streamed from the configured Subsonic/Navidrome server.
+    Server,
+    /// Pulled from the internet by a plugin — streamed straight from a URL,
+    /// or cached to disk first. Both read as "Online" to the user, which is
+    /// the distinction that matters: it is not their library.
+    Online,
+}
+
+impl SongSource {
+    pub fn of(song_id: &str) -> Self {
+        if song_id.starts_with("http://")
+            || song_id.starts_with("https://")
+            || song_id.starts_with(ONLINE_PREFIX)
+        {
+            SongSource::Online
+        } else if is_local_id(song_id) {
+            SongSource::Local
+        } else {
+            SongSource::Server
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SongSource::Local => "Local",
+            SongSource::Server => "Navidrome",
+            SongSource::Online => "Online",
+        }
+    }
 }
 
 /// Where the bytes of a track come from.
@@ -54,6 +100,13 @@ pub enum Source {
     Http {
         url: String,
         http: reqwest::Client,
+        /// Where in the track these bytes begin.
+        ///
+        /// A Subsonic stream URL encodes the seek offset, so its body really
+        /// does start there. An arbitrary file on the internet is served whole
+        /// however it is asked for, so it starts at zero — and the clock has to
+        /// agree, or it reports a position the audio is not at.
+        starts_at: Duration,
     },
     File(PathBuf),
 }
@@ -206,5 +259,18 @@ mod tests {
         assert!(!is_local_id("8f3c9e2a1b"));
         assert!(!is_local_id("localhost"));
         assert!(!is_local_id(""));
+    }
+
+    #[test]
+    fn song_sources_are_derived_from_the_id() {
+        assert_eq!(SongSource::of("local:/music/a.flac"), SongSource::Local);
+        assert_eq!(SongSource::of("8f3c9e2a1b"), SongSource::Server);
+        assert_eq!(
+            SongSource::of("https://archive.org/download/x/y.flac"),
+            SongSource::Online
+        );
+        // A plugin's cached file plays off disk, but it is still not the
+        // user's library and must not read as Local.
+        assert_eq!(SongSource::of("online:/cache/x.flac"), SongSource::Online);
     }
 }

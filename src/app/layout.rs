@@ -109,7 +109,9 @@ impl App {
             focus_mode: self.focus_mode,
             panes: [
                 self.show_queue_pane,
+                self.show_focus_queue,
                 self.show_cover_pane,
+                self.show_focus_cover,
                 self.show_lyrics_pane,
                 self.show_focus_lyrics,
                 self.show_visualiser,

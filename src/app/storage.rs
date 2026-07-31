@@ -14,7 +14,11 @@ struct SavedAppState {
     #[serde(default = "default_visualiser_height")]
     visualiser_height: u16,
     show_queue_pane: bool,
+    #[serde(default = "yes")]
+    show_focus_queue: bool,
     show_cover_pane: bool,
+    #[serde(default = "yes")]
+    show_focus_cover: bool,
     show_lyrics_pane: bool,
     #[serde(default = "yes")]
     show_focus_lyrics: bool,
@@ -87,7 +91,9 @@ impl App {
             queue_percent: self.queue_percent,
             visualiser_height: self.visualiser_height,
             show_queue_pane: self.show_queue_pane,
+            show_focus_queue: self.show_focus_queue,
             show_cover_pane: self.show_cover_pane,
+            show_focus_cover: self.show_focus_cover,
             show_lyrics_pane: self.show_lyrics_pane,
             show_focus_lyrics: self.show_focus_lyrics,
             show_visualiser: self.show_visualiser,
@@ -115,7 +121,9 @@ impl App {
         self.queue_percent = state.queue_percent.clamp(10, 80);
         self.visualiser_height = state.visualiser_height.clamp(3, 40);
         self.show_queue_pane = state.show_queue_pane;
+        self.show_focus_queue = state.show_focus_queue;
         self.show_cover_pane = state.show_cover_pane;
+        self.show_focus_cover = state.show_focus_cover;
         self.show_lyrics_pane = state.show_lyrics_pane;
         self.show_focus_lyrics = state.show_focus_lyrics;
         self.show_visualiser = state.show_visualiser;

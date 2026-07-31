@@ -1,5 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Rect, Size};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui_image::picker::Picker;
@@ -153,11 +154,12 @@ impl CoverRenderer {
 
         // The frame fills the whole pane, so it lines up with the Lyrics frame
         // below it; only the artwork inside is constrained to its aspect ratio.
+        let bg = theme.base();
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(theme.border(false))
-            .style(theme.base())
+            .style(bg)
             .title(" Cover ")
             .title_style(theme.title());
         let inner = block.inner(area);

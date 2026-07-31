@@ -31,11 +31,10 @@ pub use types::*;
 
 /// Square pixel size requested for cover art.
 ///
-/// Sized for focus mode on a large terminal: graphics protocols cannot upscale
-/// beyond the source, so a small cover leaves the artwork smaller than the pane
-/// it was given. Covers are cached on disk, so the extra bytes are paid once
-/// per album.
-pub const COVER_SIZE: u32 = 1600;
+/// Sized for focus mode on a high-DPI terminal: graphics protocols cannot upscale
+/// beyond the source. A size of 800x800 provides crisp rendering even on 4K
+/// displays while using ~4x less memory than 1600x1600.
+pub const COVER_SIZE: u32 = 800;
 const VOLUME_STEP: f32 = 0.05;
 /// Two clicks within this window on the same row count as a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -73,7 +72,15 @@ pub struct App {
 
     pub show_help: bool,
     pub show_queue_pane: bool,
+    /// Up Next in focus mode, tracked separately from the side pane, for the
+    /// same reason as `show_focus_lyrics` below: sharing one flag meant
+    /// turning it off in one view turned it off in the other too.
+    pub show_focus_queue: bool,
     pub show_cover_pane: bool,
+    /// Cover in focus mode, tracked separately from the side pane, for the
+    /// same reason as `show_focus_lyrics` below: sharing one flag meant
+    /// turning it off in one view turned it off in the other too.
+    pub show_focus_cover: bool,
     pub show_lyrics_pane: bool,
     /// Lyrics in focus mode, tracked separately from the side pane.
     ///
@@ -180,6 +187,16 @@ pub struct App {
     /// What the Discord integration last did about cover art, surfaced in
     /// Settings so a blank image is explainable rather than mysterious.
     pub discord_diagnostic: Option<Arc<std::sync::Mutex<String>>>,
+    #[cfg(feature = "nyaa")]
+    pub nyaa_plugin: crate::plugins::nyaa::NyaaPluginState,
+    pub archive_plugin: crate::plugins::archive::ArchivePluginState,
+    pub jamendo_plugin: crate::plugins::jamendo::JamendoPluginState,
+    /// The plugin fetch currently running, if any. Starting another cancels
+    /// it: two torrents competing for the same connection help nobody, and a
+    /// finished download that nobody asked for any more is pure waste.
+    pub plugin_job: Option<PluginJob>,
+    /// Which online plugin the Online tab is showing.
+    pub online_source: OnlineSource,
 
     pub active_drag: Option<Region>,
     pub drag_ratio: f64,
@@ -214,6 +231,16 @@ impl App {
         let mut keymap = Keymap::default();
         let keybinding_problems = keymap.apply_overrides(&config.keys);
 
+        #[cfg(feature = "nyaa")]
+        let fallback_online = OnlineSource::Nyaa;
+        #[cfg(not(feature = "nyaa"))]
+        let fallback_online = OnlineSource::Archive;
+
+        let online_source = OnlineSource::available(&config)
+            .first()
+            .copied()
+            .unwrap_or(fallback_online);
+
         let mut app = Self {
             theme: config.theme.clone(),
             config,
@@ -230,7 +257,9 @@ impl App {
             status_message: None,
             show_help: false,
             show_queue_pane: true,
+            show_focus_queue: true,
             show_cover_pane: true,
+            show_focus_cover: true,
             show_lyrics_pane: false,
             show_focus_lyrics: true,
             show_visualiser: true,
@@ -272,22 +301,28 @@ impl App {
             cover_generation: 0,
             cover_resized: None,
             lyrics: Default::default(),
-            lyrics_pending: false,
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(20))
                 .build()
                 .unwrap_or_default(),
+            lyrics_pending: false,
             lyrics_scroll: 0.0,
             lyrics_cache: Arc::new(crate::subsonic::lyrics::LyricsCache::new()?),
             lyrics_song: None,
+            queue_undo: Vec::new(),
             overlay: None,
             focus_mode: false,
-            queue_undo: Vec::new(),
             history: Vec::new(),
             history_bytes: 0,
             stats: crate::history::Stats::default(),
             library_genres: Vec::new(),
             discord_diagnostic: None,
+            #[cfg(feature = "nyaa")]
+            nyaa_plugin: crate::plugins::nyaa::NyaaPluginState::new(),
+            archive_plugin: crate::plugins::archive::ArchivePluginState::new(),
+            jamendo_plugin: crate::plugins::jamendo::JamendoPluginState::new(),
+            plugin_job: None,
+            online_source,
             active_drag: None,
             drag_ratio: 0.0,
             cover_percent: 25,

@@ -25,12 +25,195 @@ impl App {
             return;
         }
 
-        // The search box swallows keys so the user can type freely.
+        #[cfg(feature = "nyaa")]
+        if self.nyaa_plugin.editing_query && self.handle_nyaa_query_key(key) {
+            return;
+        }
+        if self.archive_plugin.editing_query && self.handle_archive_query_key(key) {
+            return;
+        }
+        if self.jamendo_plugin.editing_query && self.handle_jamendo_query_key(key) {
+            return;
+        }
+
+        if self.tab == Tab::Online {
+            use crossterm::event::{KeyCode, KeyModifiers};
+            let no_mods = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+            // Switching sources is shared; everything else belongs to whichever
+            // plugin currently owns the tab.
+            if key.code == KeyCode::Char('o') && no_mods {
+                self.cycle_online_source();
+                return;
+            }
+            match self.online_source {
+                #[cfg(feature = "nyaa")]
+                OnlineSource::Nyaa => {
+                    if key.code == KeyCode::Char('/') && no_mods {
+                        self.nyaa_plugin.editing_query = true;
+                        return;
+                    }
+                    if key.code == KeyCode::Char('c') && no_mods {
+                        self.cycle_nyaa_category();
+                        return;
+                    }
+                    if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
+                        self.download_selected_nyaa_item();
+                        return;
+                    }
+                    if (key.code == KeyCode::Char('s') || key.code == KeyCode::Char('p'))
+                        && key.modifiers.is_empty()
+                    {
+                        self.stream_selected_nyaa_item();
+                        return;
+                    }
+                }
+                OnlineSource::Jamendo => {
+                    if key.code == KeyCode::Char('/') && no_mods {
+                        self.jamendo_plugin.editing_query = true;
+                        return;
+                    }
+                    if key.code == KeyCode::Char('c') && no_mods {
+                        self.cycle_jamendo_format();
+                        return;
+                    }
+                    if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
+                        self.download_selected_jamendo_track();
+                        return;
+                    }
+                    if (key.code == KeyCode::Char('s') || key.code == KeyCode::Char('p'))
+                        && key.modifiers.is_empty()
+                    {
+                        self.stream_selected_jamendo_track();
+                        return;
+                    }
+                }
+                OnlineSource::Archive => {
+                    if key.code == KeyCode::Char('/') && no_mods {
+                        self.archive_plugin.editing_query = true;
+                        return;
+                    }
+                    if key.code == KeyCode::Char('c') && no_mods {
+                        self.cycle_archive_collection();
+                        return;
+                    }
+                    if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
+                        self.download_selected_archive_item();
+                        return;
+                    }
+                    if (key.code == KeyCode::Char('s') || key.code == KeyCode::Char('p'))
+                        && key.modifiers.is_empty()
+                    {
+                        self.stream_selected_archive_item();
+                        return;
+                    }
+                }
+            }
+        }
 
         let Some(action) = self.keymap.resolve(key) else {
             return;
         };
         self.handle_action(action);
+    }
+
+    #[cfg(feature = "nyaa")]
+    pub(crate) fn handle_nyaa_query_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Enter => {
+                self.nyaa_plugin.editing_query = false;
+                let query = self.nyaa_plugin.query_input.value().to_string();
+                self.search_nyaa(query);
+                return true;
+            }
+            KeyCode::Esc => {
+                self.nyaa_plugin.editing_query = false;
+                return true;
+            }
+            _ => {}
+        }
+
+        match key.code {
+            KeyCode::Char('w') if ctrl => self.nyaa_plugin.query_input.delete_word(),
+            KeyCode::Char('u') if ctrl => self.nyaa_plugin.query_input.clear(),
+            KeyCode::Char(ch) => self.nyaa_plugin.query_input.insert(ch),
+            KeyCode::Backspace => self.nyaa_plugin.query_input.backspace(),
+            KeyCode::Delete => self.nyaa_plugin.query_input.delete(),
+            KeyCode::Left => self.nyaa_plugin.query_input.left(),
+            KeyCode::Right => self.nyaa_plugin.query_input.right(),
+            KeyCode::Home => self.nyaa_plugin.query_input.home(),
+            KeyCode::End => self.nyaa_plugin.query_input.end(),
+            _ => {}
+        }
+        true
+    }
+
+    pub(crate) fn handle_jamendo_query_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Enter => {
+                self.jamendo_plugin.editing_query = false;
+                let query = self.jamendo_plugin.query_input.value().to_string();
+                self.search_jamendo(query);
+                return true;
+            }
+            KeyCode::Esc => {
+                self.jamendo_plugin.editing_query = false;
+                return true;
+            }
+            _ => {}
+        }
+
+        match key.code {
+            KeyCode::Char('w') if ctrl => self.jamendo_plugin.query_input.delete_word(),
+            KeyCode::Char('u') if ctrl => self.jamendo_plugin.query_input.clear(),
+            KeyCode::Char(ch) => self.jamendo_plugin.query_input.insert(ch),
+            KeyCode::Backspace => self.jamendo_plugin.query_input.backspace(),
+            KeyCode::Delete => self.jamendo_plugin.query_input.delete(),
+            KeyCode::Left => self.jamendo_plugin.query_input.left(),
+            KeyCode::Right => self.jamendo_plugin.query_input.right(),
+            KeyCode::Home => self.jamendo_plugin.query_input.home(),
+            KeyCode::End => self.jamendo_plugin.query_input.end(),
+            _ => {}
+        }
+        true
+    }
+
+    pub(crate) fn handle_archive_query_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Enter => {
+                self.archive_plugin.editing_query = false;
+                let query = self.archive_plugin.query_input.value().to_string();
+                self.search_archive(query);
+                return true;
+            }
+            KeyCode::Esc => {
+                self.archive_plugin.editing_query = false;
+                return true;
+            }
+            _ => {}
+        }
+
+        match key.code {
+            KeyCode::Char('w') if ctrl => self.archive_plugin.query_input.delete_word(),
+            KeyCode::Char('u') if ctrl => self.archive_plugin.query_input.clear(),
+            KeyCode::Char(ch) => self.archive_plugin.query_input.insert(ch),
+            KeyCode::Backspace => self.archive_plugin.query_input.backspace(),
+            KeyCode::Delete => self.archive_plugin.query_input.delete(),
+            KeyCode::Left => self.archive_plugin.query_input.left(),
+            KeyCode::Right => self.archive_plugin.query_input.right(),
+            KeyCode::Home => self.archive_plugin.query_input.home(),
+            KeyCode::End => self.archive_plugin.query_input.end(),
+            _ => {}
+        }
+        true
     }
 
     /// Route a keystroke into the open settings text field.
@@ -89,7 +272,8 @@ impl App {
                 }
             }
             Action::Tab(index) => {
-                if let Some(tab) = Tab::ALL.get(index) {
+                let available = Tab::available(&self.config);
+                if let Some(tab) = available.get(index) {
                     self.go_to_tab(*tab);
                 }
             }
@@ -186,10 +370,22 @@ impl App {
             }
             Action::ToggleHelp => self.show_help = !self.show_help,
             Action::ToggleQueuePane => {
-                self.show_queue_pane = !self.show_queue_pane;
+                // Whichever Up Next the user is actually looking at.
+                if self.focus_mode {
+                    self.show_focus_queue = !self.show_focus_queue;
+                } else {
+                    self.show_queue_pane = !self.show_queue_pane;
+                }
                 self.ensure_focus_visible();
             }
-            Action::ToggleCoverPane => self.show_cover_pane = !self.show_cover_pane,
+            Action::ToggleCoverPane => {
+                // Whichever cover the user is actually looking at.
+                if self.focus_mode {
+                    self.show_focus_cover = !self.show_focus_cover;
+                } else {
+                    self.show_cover_pane = !self.show_cover_pane;
+                }
+            }
             Action::ToggleLyricsPane => {
                 // Whichever lyrics the user is actually looking at.
                 if self.focus_mode {
@@ -303,17 +499,24 @@ impl App {
                 let Some(region) = hits.at(event.column, event.row) else {
                     return;
                 };
-                self.status_message = None;
 
                 match region {
                     Region::Tab(index) => {
-                        if let Some(tab) = Tab::ALL.get(index) {
+                        let available = Tab::available(&self.config);
+                        if let Some(tab) = available.get(index) {
                             self.go_to_tab(*tab);
                         }
                     }
                     Region::LibraryMode(index) => {
                         if let Some(mode) = LibraryMode::ALL.get(index) {
                             self.set_library_mode(*mode);
+                        }
+                    }
+                    Region::OnlineSearch => self.focus_online_search(),
+                    Region::OnlineFilter => self.cycle_online_filter(),
+                    Region::OnlineSource(index) => {
+                        if let Some(source) = OnlineSource::available(&self.config).get(index) {
+                            self.set_online_source(*source);
                         }
                     }
                     Region::PlayPause => self.player.send(PlayerCommand::TogglePause),
@@ -361,7 +564,7 @@ impl App {
                                 Some((last, at)) if last == region && now.duration_since(at) < DOUBLE_CLICK
                             );
                             self.last_click = Some((region, now));
-                            if is_double {
+                            if is_double || pane == Pane::Online {
                                 self.activate();
                             }
                         }

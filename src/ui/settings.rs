@@ -25,6 +25,10 @@ pub enum Section {
     Appearance,
     Playback,
     Integrations,
+    #[cfg(feature = "nyaa")]
+    PluginNyaa,
+    PluginArchive,
+    PluginJamendo,
     QueueColumns,
     Keys,
 }
@@ -32,12 +36,16 @@ pub enum Section {
 impl Section {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Server => "Server (Navidrome / Subsonic)",
-            Self::Local => "Local library",
-            Self::Appearance => "Appearance",
-            Self::Playback => "Playback",
-            Self::Integrations => "Integrations",
-            Self::QueueColumns => "Queue columns",
+            Self::Server => "Server Setup (Subsonic)",
+            Self::Local => "Local Library",
+            Self::Appearance => "Appearance & Layout",
+            Self::Playback => "Audio Playback",
+            Self::Integrations => "Online Integrations",
+            #[cfg(feature = "nyaa")]
+            Self::PluginNyaa => "Plugin — Nyaa.si",
+            Self::PluginArchive => "Plugin — Internet Archive",
+            Self::PluginJamendo => "Plugin — Jamendo",
+            Self::QueueColumns => "Queue Columns",
             Self::Keys => "Keybindings",
         }
     }
@@ -82,6 +90,21 @@ pub enum SettingItem {
     FetchOnlineLyrics,
     LrclibUrl,
 
+    // Plugins
+    #[cfg(feature = "nyaa")]
+    PluginNyaaEnabled,
+    #[cfg(feature = "nyaa")]
+    PluginNyaaPrimaryAction,
+    #[cfg(feature = "nyaa")]
+    PluginNyaaDownloadDir,
+    PluginArchiveEnabled,
+    PluginArchivePrimaryAction,
+    PluginArchiveDownloadDir,
+    PluginJamendoEnabled,
+    PluginJamendoClientId,
+    PluginJamendoPrimaryAction,
+    PluginJamendoDownloadDir,
+
     // Queue columns
     QueueColumn(usize),
     AddQueueColumn,
@@ -124,6 +147,18 @@ impl SettingItem {
             | Self::FetchOnlineLyrics
             | Self::LrclibUrl => Section::Integrations,
 
+            #[cfg(feature = "nyaa")]
+            Self::PluginNyaaEnabled | Self::PluginNyaaDownloadDir | Self::PluginNyaaPrimaryAction => {
+                Section::PluginNyaa
+            }
+            Self::PluginArchiveEnabled
+            | Self::PluginArchivePrimaryAction
+            | Self::PluginArchiveDownloadDir => Section::PluginArchive,
+            Self::PluginJamendoEnabled
+            | Self::PluginJamendoClientId
+            | Self::PluginJamendoPrimaryAction
+            | Self::PluginJamendoDownloadDir => Section::PluginJamendo,
+
             Self::QueueColumn(_) | Self::AddQueueColumn => Section::QueueColumns,
             Self::ShowKeybindings => Section::Keys,
         }
@@ -141,7 +176,19 @@ impl SettingItem {
                 | Self::LocalPlaylistDir
                 | Self::DiscordClientId
                 | Self::LrclibUrl
-        )
+                | Self::PluginArchiveDownloadDir
+                | Self::PluginJamendoClientId
+                | Self::PluginJamendoDownloadDir
+        ) || {
+            #[cfg(feature = "nyaa")]
+            {
+                matches!(self, Self::PluginNyaaDownloadDir)
+            }
+            #[cfg(not(feature = "nyaa"))]
+            {
+                false
+            }
+        }
     }
 
     /// Passwords are never echoed, and never written to `config.toml`.
@@ -154,37 +201,51 @@ impl SettingItem {
     /// by a different amount on every row.
     pub fn title(self) -> String {
         match self {
-            Self::ServerEnabled => "Use this server".into(),
+            Self::ServerEnabled => "Use server".into(),
             Self::ServerUrl => "Server URL".into(),
             Self::ServerUsername => "Username".into(),
             Self::ServerPassword => "Password".into(),
-            Self::StreamFormat => "Audio stream format".into(),
+            Self::StreamFormat => "Audio format".into(),
             Self::TestConnection => "Test connection".into(),
 
             Self::LocalPath(index) => format!("Music folder {}", index + 1),
             Self::AddLocalPath => "Add music folder".into(),
             Self::LocalPlaylistDir => "Playlist folder".into(),
-            Self::ScanOnStart => "Rescan at startup".into(),
-            Self::Rescan => "Rescan now".into(),
+            Self::ScanOnStart => "Scan on startup".into(),
+            Self::Rescan => "Rescan library".into(),
 
             Self::ThemePreset => "Theme preset".into(),
             Self::Glyphs => "Icon set".into(),
-            Self::CoverWidth => "Cover pane width".into(),
-            Self::QueueWidth => "Up Next pane width".into(),
+            Self::CoverWidth => "Cover width".into(),
+            Self::QueueWidth => "Up Next width".into(),
             Self::ShowCover => "Show cover pane".into(),
             Self::ShowQueue => "Show Up Next pane".into(),
             Self::ShowLyrics => "Show lyrics pane".into(),
 
-            Self::VolumeScale => "Volume scaling curve".into(),
+            Self::VolumeScale => "Volume scale".into(),
             Self::BufferSeconds => "Audio buffer".into(),
-            Self::AutoMix => "Auto-Mix / radio mode".into(),
-            Self::ClearQueue => "Clear the play queue".into(),
+            Self::AutoMix => "Auto-mix / radio".into(),
+            Self::ClearQueue => "Clear queue".into(),
 
-            Self::DiscordEnabled => "Discord Rich Presence".into(),
-            Self::DiscordClientId => "Discord application ID".into(),
+            Self::DiscordEnabled => "Discord presence".into(),
+            Self::DiscordClientId => "Discord app ID".into(),
             Self::DiscordCoverArt => "Discord cover art".into(),
             Self::FetchOnlineLyrics => "Online lyrics (LRCLIB)".into(),
-            Self::LrclibUrl => "LRCLIB server URL".into(),
+            Self::LrclibUrl => "LRCLIB URL".into(),
+
+            #[cfg(feature = "nyaa")]
+            Self::PluginNyaaEnabled => "Enable plugin".into(),
+            #[cfg(feature = "nyaa")]
+            Self::PluginNyaaPrimaryAction => "Default action".into(),
+            #[cfg(feature = "nyaa")]
+            Self::PluginNyaaDownloadDir => "Download path".into(),
+            Self::PluginArchiveEnabled => "Enable plugin".into(),
+            Self::PluginArchivePrimaryAction => "Default action".into(),
+            Self::PluginArchiveDownloadDir => "Download path".into(),
+            Self::PluginJamendoEnabled => "Enable plugin".into(),
+            Self::PluginJamendoClientId => "Client ID".into(),
+            Self::PluginJamendoPrimaryAction => "Default action".into(),
+            Self::PluginJamendoDownloadDir => "Download path".into(),
 
             Self::QueueColumn(index) => format!("Column {}", index + 1),
             Self::AddQueueColumn => "Add column".into(),
@@ -230,6 +291,23 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::DiscordCoverArt,
         SettingItem::FetchOnlineLyrics,
         SettingItem::LrclibUrl,
+    ]);
+
+    #[cfg(feature = "nyaa")]
+    rows.extend([
+        SettingItem::PluginNyaaEnabled,
+        SettingItem::PluginNyaaPrimaryAction,
+        SettingItem::PluginNyaaDownloadDir,
+    ]);
+
+    rows.extend([
+        SettingItem::PluginArchiveEnabled,
+        SettingItem::PluginArchivePrimaryAction,
+        SettingItem::PluginArchiveDownloadDir,
+        SettingItem::PluginJamendoEnabled,
+        SettingItem::PluginJamendoClientId,
+        SettingItem::PluginJamendoPrimaryAction,
+        SettingItem::PluginJamendoDownloadDir,
     ]);
 
     rows.extend((0..config.queue_columns.len()).map(SettingItem::QueueColumn));
@@ -359,6 +437,55 @@ fn value_of(app: &App, item: SettingItem) -> String {
             }
         }
 
+        #[cfg(feature = "nyaa")]
+        SettingItem::PluginNyaaEnabled => on_off(config.plugins.nyaa.enabled),
+        #[cfg(feature = "nyaa")]
+        SettingItem::PluginNyaaPrimaryAction => format!(
+            "{}  (Left/Right/Enter to toggle)",
+            config.plugins.nyaa.primary_action.label()
+        ),
+        #[cfg(feature = "nyaa")]
+        SettingItem::PluginNyaaDownloadDir => config
+            .plugins
+            .nyaa
+            .download_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default: local music folder)".into()),
+
+        SettingItem::PluginArchiveEnabled => on_off(config.plugins.archive.enabled),
+        SettingItem::PluginArchivePrimaryAction => format!(
+            "{}  (Left/Right/Enter to toggle)",
+            config.plugins.archive.primary_action.label()
+        ),
+        SettingItem::PluginArchiveDownloadDir => config
+            .plugins
+            .archive
+            .download_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default: local music folder)".into()),
+
+        SettingItem::PluginJamendoEnabled => on_off(config.plugins.jamendo.enabled),
+        SettingItem::PluginJamendoClientId => {
+            if config.plugins.jamendo.client_id.trim().is_empty() {
+                "(not set — free key at devportal.jamendo.com)".into()
+            } else {
+                config.plugins.jamendo.client_id.clone()
+            }
+        }
+        SettingItem::PluginJamendoPrimaryAction => format!(
+            "{}  (Left/Right/Enter to toggle)",
+            config.plugins.jamendo.primary_action.label()
+        ),
+        SettingItem::PluginJamendoDownloadDir => config
+            .plugins
+            .jamendo
+            .download_dir
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default: local music folder)".into()),
+
         SettingItem::QueueColumn(index) => config
             .queue_columns
             .get(index)
@@ -377,7 +504,7 @@ fn value_of(app: &App, item: SettingItem) -> String {
 }
 
 fn on_off(value: bool) -> String {
-    if value { "ON".into() } else { "OFF".into() }
+    if value { "Enabled".into() } else { "Disabled".into() }
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {

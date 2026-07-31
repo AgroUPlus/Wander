@@ -132,8 +132,8 @@ impl Action {
             AddToQueue | PlayNext | RemoveFromQueue | ClearQueue | MoveTrackUp | MoveTrackDown
             | UndoQueue => Category::Queue,
             ToggleQueuePane | ToggleCoverPane | ToggleLyricsPane | ToggleVisualiser
-            | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight
-            | ResizePaneUp | ResizePaneDown => Category::Panels,
+            | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight | ResizePaneUp
+            | ResizePaneDown => Category::Panels,
             OpenPalette => Category::Navigation,
             Quit | Refresh | ToggleHelp => Category::Misc,
         }

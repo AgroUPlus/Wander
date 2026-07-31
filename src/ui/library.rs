@@ -16,7 +16,7 @@ fn list_pane(
     frame: &mut Frame,
     area: Rect,
     title: &str,
-    items: Vec<String>,
+    items: Vec<Line<'static>>,
     selection: &mut Selection,
     pane: Pane,
     focused: bool,
@@ -26,26 +26,55 @@ fn list_pane(
     selection.clamp(items.len());
     let count = items.len();
 
+    let bg = theme.base();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(theme.border(focused))
-        .style(theme.base())
+        .style(bg)
         .title(truncate(
             &format!(" {title} ({count}) "),
             area.width.saturating_sub(2) as usize,
         ))
-        .title_style(if focused { theme.title() } else { theme.dim() });
+        .title_style(theme.title());
     let inner = block.inner(area);
 
-    let list = List::new(items.into_iter().map(ListItem::new).collect::<Vec<_>>())
-        .highlight_style(theme.selected())
-        .block(block);
+    if count == 0 {
+        frame.render_widget(block, area);
+        let text = Span::styled("Nothing here", theme.dim());
+        frame.render_widget(Paragraph::new(text).centered(), inner);
+        return;
+    }
 
     let mut state = ListState::default().with_selected(Some(selection.index));
-    frame.render_stateful_widget(list, area, &mut state);
 
-    register_rows(hits, inner, count, selection.index, pane, 0);
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(theme.selected());
+
+    frame.render_stateful_widget(list, area, &mut state);
+    selection.index = state.selected().unwrap_or(0);
+
+    let first = state.offset();
+    let visible = inner.height as usize;
+    for slot in 0..visible.min(count.saturating_sub(first)) {
+        let y = inner.y + slot as u16;
+        if y >= inner.bottom() {
+            break;
+        }
+        hits.push(
+            Rect {
+                x: inner.x,
+                y,
+                width: inner.width,
+                height: 1,
+            },
+            Region::Row {
+                pane,
+                index: first + slot,
+            },
+        );
+    }
 }
 
 /// The Library tab: a mode selector, then the browser for that mode.
@@ -58,10 +87,10 @@ pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
         LibraryMode::Albums => draw_albums(frame, area, app, theme, hits),
         LibraryMode::Playlists => draw_playlists(frame, area, app, theme, hits),
         LibraryMode::Tracks => {
-            let songs: Vec<String> = app
+            let songs: Vec<Line> = app
                 .tracks
                 .iter()
-                .map(|song| flat_track_label(song, app))
+                .map(|song| flat_track_line(song, app, theme))
                 .collect();
             let focused = app.focus == Pane::Tracks;
             list_pane(
@@ -77,10 +106,10 @@ pub fn draw_library(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
             );
         }
         LibraryMode::Favorites => {
-            let songs: Vec<String> = app
+            let songs: Vec<Line> = app
                 .favorites
                 .iter()
-                .map(|song| flat_track_label(song, app))
+                .map(|song| flat_track_line(song, app, theme))
                 .collect();
             let focused = app.focus == Pane::Favorites;
             list_pane(
@@ -142,16 +171,27 @@ pub fn draw_artists(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme,
     ])
     .split(area);
 
-    let artists: Vec<String> = app.artists.iter().map(|a| a.name.clone()).collect();
-    let albums: Vec<String> = app
+    let artists: Vec<Line> = app
+        .artists
+        .iter()
+        .map(|a| Line::from(a.name.clone()))
+        .collect();
+    let albums: Vec<Line> = app
         .artist_albums
         .iter()
-        .map(|a| match a.year {
-            Some(year) => format!("{} ({year})", a.name),
-            None => a.name.clone(),
+        .map(|a| {
+            Line::from(match a.year {
+                Some(year) => format!("{} ({year})", a.name),
+                None => a.name.clone(),
+            })
         })
         .collect();
-    let songs: Vec<String> = app.artist_songs.iter().map(track_label).collect();
+    let glyphs = app.config.glyphs;
+    let songs: Vec<Line> = app
+        .artist_songs
+        .iter()
+        .map(|song| track_line(song, glyphs, theme))
+        .collect();
 
     let focus = app.focus;
     list_pane(
@@ -194,12 +234,17 @@ pub fn draw_albums(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
 
-    let albums: Vec<String> = app
+    let albums: Vec<Line> = app
         .albums
         .iter()
-        .map(|a| format!("{} — {}", a.artist.as_deref().unwrap_or("Unknown"), a.name))
+        .map(|a| Line::from(format!("{} — {}", a.artist.as_deref().unwrap_or("Unknown"), a.name)))
         .collect();
-    let songs: Vec<String> = app.album_songs.iter().map(track_label).collect();
+    let glyphs = app.config.glyphs;
+    let songs: Vec<Line> = app
+        .album_songs
+        .iter()
+        .map(|song| track_line(song, glyphs, theme))
+        .collect();
 
     let focus = app.focus;
     list_pane(
@@ -237,12 +282,17 @@ pub fn draw_playlists(
     let columns =
         Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)]).split(area);
 
-    let playlists: Vec<String> = app
+    let playlists: Vec<Line> = app
         .playlists
         .iter()
-        .map(|p| format!("{} ({})", p.name, p.song_count))
+        .map(|p| Line::from(format!("{} ({})", p.name, p.song_count)))
         .collect();
-    let songs: Vec<String> = app.playlist_songs.iter().map(track_label).collect();
+    let glyphs = app.config.glyphs;
+    let songs: Vec<Line> = app
+        .playlist_songs
+        .iter()
+        .map(|song| track_line(song, glyphs, theme))
+        .collect();
 
     let focus = app.focus;
     list_pane(
@@ -270,7 +320,11 @@ pub fn draw_playlists(
 }
 
 /// In a flat list there is no album context, so name the artist and album.
-fn flat_track_label(song: &crate::subsonic::models::Song, app: &App) -> String {
+fn flat_track_line(
+    song: &crate::subsonic::models::Song,
+    app: &App,
+    theme: &Theme,
+) -> Line<'static> {
     let duration = format_duration(std::time::Duration::from_secs(song.duration as u64));
     let star = if song.is_starred() {
         format!("{} ", app.config.glyphs.icon(Icon::Star))
@@ -281,18 +335,31 @@ fn flat_track_label(song: &crate::subsonic::models::Song, app: &App) -> String {
         stars if stars.is_empty() => String::new(),
         stars => format!("  {stars}"),
     };
-    format!(
-        "{star}{}  ·  {}  ·  {}  [{duration}]{rating}",
-        song.title,
-        song.artist_or_unknown(),
-        song.album_or_unknown()
-    )
+    Line::from(vec![
+        super::widgets::source_span(&song.id, app.config.glyphs, theme),
+        Span::raw(format!(
+            " {star}{}  ·  {}  ·  {}  [{duration}]{rating}",
+            song.title,
+            song.artist_or_unknown(),
+            song.album_or_unknown()
+        )),
+    ])
 }
 
-fn track_label(song: &crate::subsonic::models::Song) -> String {
+/// A track inside a known album or playlist: the badge still leads, since a
+/// mixed queue is exactly where the source is not obvious from context.
+fn track_line(
+    song: &crate::subsonic::models::Song,
+    glyphs: crate::ui::glyphs::GlyphSet,
+    theme: &Theme,
+) -> Line<'static> {
     let duration = format_duration(std::time::Duration::from_secs(song.duration as u64));
-    match song.track {
-        Some(track) => format!("{track:>2}. {}  [{duration}]", song.title),
-        None => format!("{}  [{duration}]", song.title),
-    }
+    let text = match song.track {
+        Some(track) => format!(" {track:>2}. {}  [{duration}]", song.title),
+        None => format!(" {}  [{duration}]", song.title),
+    };
+    Line::from(vec![
+        super::widgets::source_span(&song.id, glyphs, theme),
+        Span::raw(text),
+    ])
 }

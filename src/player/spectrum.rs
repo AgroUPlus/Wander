@@ -51,6 +51,8 @@ pub struct Spectrum {
     /// Where the next sample goes; also the oldest sample's index.
     write: usize,
     scratch: Vec<Complex32>,
+    /// Pre-allocated buffer for band levels in dB, reused every update.
+    levels: Vec<f32>,
     /// Smoothed bar heights in `[0, 1]`.
     bars: Vec<f32>,
     /// Past frames, newest first, for the waterfall mode. Kept here rather than
@@ -71,6 +73,7 @@ impl Spectrum {
                 0.5 - 0.5 * (std::f32::consts::TAU * t).cos()
             })
             .collect();
+        let bar_count = bars.max(1);
 
         Self {
             tap,
@@ -79,7 +82,8 @@ impl Spectrum {
             history: vec![0.0; FFT_SIZE],
             write: 0,
             scratch: vec![Complex32::new(0.0, 0.0); FFT_SIZE],
-            bars: vec![0.0; bars.max(1)],
+            levels: Vec::with_capacity(bar_count),
+            bars: vec![0.0; bar_count],
             frames: std::collections::VecDeque::with_capacity(HISTORY),
             reference: REF_FLOOR,
             sample_rate: sample_rate as f32,
@@ -154,7 +158,7 @@ impl Spectrum {
         let scale = 2.0 / FFT_SIZE as f32;
 
         // First pass: band energies in dB, tilted.
-        let mut levels = Vec::with_capacity(count);
+        self.levels.clear();
         let mut loudest = f32::NEG_INFINITY;
         for index in 0..count {
             // Log-spaced bands: musically even, unlike linear FFT bins which
@@ -170,7 +174,7 @@ impl Spectrum {
             let mean_sq =
                 band.iter().map(|c| (c.norm() * scale).powi(2)).sum::<f32>() / band.len() as f32;
             let db = 10.0 * mean_sq.max(1e-12).log10() + tilt_db(lo);
-            levels.push(db);
+            self.levels.push(db);
             loudest = loudest.max(db);
         }
 
@@ -184,7 +188,7 @@ impl Spectrum {
         self.reference = self.reference.clamp(REF_FLOOR, REF_CEIL);
 
         let floor = self.reference - RANGE;
-        for (index, db) in levels.into_iter().enumerate() {
+        for (index, &db) in self.levels.iter().enumerate() {
             let level = ((db - floor) / RANGE).clamp(0.0, 1.0);
             let decayed = self.bars[index] * DECAY;
             self.bars[index] = level.max(decayed);

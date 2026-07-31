@@ -148,7 +148,15 @@ impl Library for LocalLibrary {
                 "{} is no longer on disk; rescan the library",
                 track.path.display()
             ),
-            None => bail!("this track is not in the local index; rescan the library"),
+            None => {
+                let raw_path = song.id.strip_prefix(super::LOCAL_PREFIX).unwrap_or(&song.id);
+                let path = PathBuf::from(raw_path);
+                if path.is_file() {
+                    Ok(Source::File(path))
+                } else {
+                    bail!("this track is not in the local index; rescan the library")
+                }
+            }
         }
     }
 
@@ -562,7 +570,7 @@ fn write_m3u(path: &Path, paths: &[PathBuf]) -> Result<()> {
 
 /// Cover art for a track: the embedded picture first, then a likely-looking
 /// image beside it.
-fn read_cover(track: &Path) -> Result<Vec<u8>> {
+pub(crate) fn read_cover(track: &Path) -> Result<Vec<u8>> {
     use lofty::file::TaggedFileExt;
     use lofty::prelude::ItemKey;
     let _ = ItemKey::AlbumArtist;

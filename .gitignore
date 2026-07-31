@@ -1,1 +1,4 @@
 /target
+/src/plugins/nyaa.rs
+/src/plugins/nyaa/
+/*.patch

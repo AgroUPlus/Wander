@@ -14,7 +14,7 @@ fn shape() -> FrameShape {
         overlay: None,
         show_help: false,
         focus_mode: false,
-        panes: [true, true, false, true, true],
+        panes: [true, true, true, true, false, true, true],
         panes_sizes: [30, 30, 8],
         cover: 0,
         tab: 0,
@@ -65,7 +65,7 @@ fn everything_that_can_cover_the_artwork_changes_the_frame_shape() {
             ..base
         },
         FrameShape {
-            panes: [false, true, false, true, true],
+            panes: [false, true, true, true, false, true, true],
             ..base
         },
         FrameShape { tab: 1, ..base },

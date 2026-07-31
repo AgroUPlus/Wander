@@ -31,6 +31,15 @@ pub enum Region {
     Tab(usize),
     /// One of the Library tab's view buttons.
     LibraryMode(usize),
+    /// One of the Online tab's plugin buttons.
+    OnlineSource(usize),
+    /// The Online tab's filter box — category, collection or format,
+    /// depending on which plugin owns the tab.
+    OnlineFilter,
+    /// The Online tab's search box. Distinct from a result row: the Online
+    /// pane activates on a single click, so a search box that reported itself
+    /// as row 0 started downloading the first result when clicked.
+    OnlineSearch,
     PlayPause,
     Repeat,
     Shuffle,
@@ -171,9 +180,11 @@ fn draw_focus(
     hits: &mut Hits,
 ) {
     let (_, queue_percent, viz_height) = app.tween_panes();
-    let show_viz_bottom =
-        app.show_cover_pane && app.show_visualiser && area.height > viz_height + 8;
-    let show_viz_in_middle = !app.show_cover_pane && app.show_visualiser;
+    let show_viz_bottom = app.show_focus_cover
+        && app.show_visualiser
+        && area.height > viz_height + 8;
+    let show_viz_in_middle =
+        !app.show_focus_cover && app.show_visualiser;
 
     let mut constraints = vec![Constraint::Length(3), Constraint::Min(5)];
     if show_viz_bottom {
@@ -185,7 +196,7 @@ fn draw_focus(
 
     // Up Next is togglable here too, so focus mode can still be used to steer
     // what plays rather than only to watch it.
-    let (middle, queue_area) = if app.show_queue_pane {
+    let (middle, queue_area) = if app.show_focus_queue {
         let split =
             Layout::horizontal([Constraint::Min(20), Constraint::Percentage(queue_percent)])
                 .split(rows[1]);
@@ -194,7 +205,7 @@ fn draw_focus(
         (rows[1], None)
     };
 
-    if app.show_cover_pane {
+    if app.show_focus_cover {
         // Lyrics have their own toggle here (`y` / `L`); focus mode is a reading
         // view, so they are on by default.
         let cover_width = focus_cover_width(
@@ -315,20 +326,28 @@ fn draw_body(
     // Eased sizes, so resizing glides rather than stepping.
     let (cover_percent, queue_percent, viz_height) = app.tween_panes();
 
-    let (body_area, mode_bar_area) = if app.tab == Tab::Library {
+    let (body_area, mode_bar_area) = if app.tab == Tab::Library || app.tab == Tab::Online {
         let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(3)]).split(area);
         (rows[1], Some(rows[0]))
     } else {
         (area, None)
     };
 
+    // Drawn full-width, above the column split, so the cover/lyrics/queue
+    // panes land below the header instead of squeezed beside it.
     if let Some(mode_area) = mode_bar_area {
-        library::draw_mode_selector(frame, mode_area, app, theme, hits);
+        match app.tab {
+            Tab::Library => library::draw_mode_selector(frame, mode_area, app, theme, hits),
+            Tab::Online => draw_source_selector(frame, mode_area, app, theme, hits),
+            _ => {}
+        }
     }
+
+    let side_viz = app.show_visualiser;
 
     let mut constraints = Vec::new();
     constraints.push(Constraint::Min(20));
-    if app.show_cover_pane || side_lyrics || app.show_visualiser {
+    if app.show_cover_pane || side_lyrics || side_viz {
         constraints.push(Constraint::Percentage(cover_percent));
     }
     if side_queue {
@@ -338,7 +357,7 @@ fn draw_body(
 
     let mut next = 1;
     let content = columns[0];
-    let side_area = if app.show_cover_pane || side_lyrics || app.show_visualiser {
+    let side_area = if app.show_cover_pane || side_lyrics || side_viz {
         let a = columns[next];
         next += 1;
         Some(a)
@@ -355,6 +374,18 @@ fn draw_body(
         Tab::Home => home::draw(frame, content, app, theme, hits),
         Tab::Queue => queue::draw(frame, content, app, theme, hits, Pane::Queue, true),
         Tab::Library => library::draw_library(frame, content, app, theme, hits),
+        Tab::Online => match app.online_source {
+            #[cfg(feature = "nyaa")]
+            crate::app::OnlineSource::Nyaa => {
+                crate::plugins::nyaa::ui::draw(frame, content, app, theme, hits)
+            }
+            crate::app::OnlineSource::Archive => {
+                crate::plugins::archive::ui::draw(frame, content, app, theme, hits)
+            }
+            crate::app::OnlineSource::Jamendo => {
+                crate::plugins::jamendo::ui::draw(frame, content, app, theme, hits)
+            }
+        },
         Tab::Settings => settings::draw(frame, content, app, theme, hits),
     }
 
@@ -362,7 +393,7 @@ fn draw_body(
         // The side column stacks whichever of cover / lyrics / visualiser are
         // enabled. The visualiser takes a fixed height; the rest share what is
         // left, so turning one off simply gives its space to the others.
-        let show_viz = app.show_visualiser && side.height > viz_height + 4;
+        let show_viz = side_viz && side.height > viz_height + 4;
         let flexible = app.show_cover_pane as u16 + side_lyrics as u16;
 
         let mut constraints = Vec::new();
@@ -395,14 +426,69 @@ fn draw_body(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::Theme) {
-    let text = app.status_message.clone().unwrap_or_else(|| {
+    let (text, style) = if let Some(msg) = &app.status_message {
+        let single_line = msg.replace('\n', " • ").replace('\r', "");
+        let st = if msg.contains("failed") || msg.contains("error") || msg.contains("limit") || msg.contains("Err") {
+            theme.error()
+        } else {
+            theme.selected()
+        };
+        (format!("⚡ {}", single_line), st)
+    } else {
         let radio_active = app.player.queue.lock().unwrap().radio;
         let radio_badge = if radio_active { "  •  Auto-Mix ON" } else { "" };
-        format!(
-            "space play/pause  •  n/p skip  •  a queue  •  / go to anything  •  m library view  •  F focus  •  C-h keys{radio_badge}"
+        (
+            format!(
+                "space play/pause  •  n/p skip  •  a queue  •  / go to anything  •  m library view  •  F focus  •  C-h keys{radio_badge}"
+            ),
+            theme.dim(),
         )
-    });
-    frame.render_widget(Paragraph::new(text).style(theme.dim()).centered(), area);
+    };
+    frame.render_widget(Paragraph::new(text).style(style).centered(), area);
+}
+
+
+/// The Online tab's plugin selector: every enabled source, active one lit.
+///
+/// Two plugins' result tables look much alike, so which one is being searched
+/// has to be visible at a glance rather than inferred from the pane title.
+fn draw_source_selector(
+    frame: &mut Frame,
+    area: Rect,
+    app: &App,
+    theme: &crate::theme::Theme,
+    hits: &mut Hits,
+) {
+    use crate::app::OnlineSource;
+
+    let sources = OnlineSource::available(&app.config);
+    let mut spans = vec![Span::styled("  ", theme.dim())];
+    let mut x = area.x + 2;
+
+    for (index, source) in sources.iter().enumerate() {
+        let active = *source == app.online_source;
+        let label = format!(" {} ", source.title());
+        let width = label.chars().count() as u16;
+        let style = if active { theme.selected() } else { theme.dim() };
+
+        hits.push(
+            Rect {
+                x,
+                y: area.y,
+                width,
+                height: 1,
+            },
+            Region::OnlineSource(index),
+        );
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+        x += width + 1;
+    }
+
+    if sources.len() > 1 {
+        spans.push(Span::styled("  [o] switch", theme.dim()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 #[cfg(test)]

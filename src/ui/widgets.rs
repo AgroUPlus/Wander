@@ -93,6 +93,48 @@ pub fn gradient(from: Color, to: Color, t: f64) -> Color {
     }
 }
 
+/// The one-character badge marking where a track comes from.
+///
+/// One place decides both the glyph and the colour, so the queue, the library
+/// lists and the player bar cannot drift apart and teach the user two
+/// different meanings for the same symbol.
+pub fn source_glyph(source: crate::library::SongSource, glyphs: crate::ui::glyphs::GlyphSet) -> &'static str {
+    use crate::library::SongSource;
+    use crate::ui::glyphs::Icon;
+    glyphs.icon(match source {
+        SongSource::Local => Icon::SourceLocal,
+        SongSource::Server => Icon::SourceServer,
+        SongSource::Online => Icon::SourceOnline,
+    })
+}
+
+/// Colour for a source badge, drawn from the active theme so it stays legible
+/// on every preset.
+pub fn source_style(
+    source: crate::library::SongSource,
+    theme: &crate::theme::Theme,
+) -> Style {
+    use crate::library::SongSource;
+    let colour = match source {
+        // The user's own files are the unremarkable case, so they get the
+        // quietest colour; anything arriving over a network stands out.
+        SongSource::Local => theme.dim.0,
+        SongSource::Server => theme.accent.0,
+        SongSource::Online => theme.current_track.0,
+    };
+    Style::default().fg(colour)
+}
+
+/// A source badge as a styled span, ready to prefix a row.
+pub fn source_span(
+    song_id: &str,
+    glyphs: crate::ui::glyphs::GlyphSet,
+    theme: &crate::theme::Theme,
+) -> Span<'static> {
+    let source = crate::library::SongSource::of(song_id);
+    Span::styled(source_glyph(source, glyphs), source_style(source, theme))
+}
+
 /// Truncate to `width` display cells, appending an ellipsis when it does not
 /// fit. Uses character counts, which is adequate for the Latin/CJK mix in
 /// library metadata and avoids pulling in a full width-measuring dependency.
@@ -410,5 +452,38 @@ mod input_tests {
         assert_eq!(input.value(), "abc", "backspace at the start is a no-op");
         input.insert('z');
         assert_eq!(input.value(), "zabc", "caret is clamped to the start");
+    }
+
+    /// A badge that looked the same for two sources would be worse than no
+    /// badge at all: it would confidently say the wrong thing.
+    #[test]
+    fn every_glyph_set_tells_the_three_sources_apart() {
+        use super::source_glyph;
+        use crate::library::SongSource;
+        use crate::ui::glyphs::GlyphSet;
+
+        for set in [GlyphSet::Nerd, GlyphSet::Unicode, GlyphSet::Ascii] {
+            let badges = [
+                source_glyph(SongSource::Local, set),
+                source_glyph(SongSource::Server, set),
+                source_glyph(SongSource::Online, set),
+            ];
+            let unique: std::collections::HashSet<_> = badges.iter().collect();
+            assert_eq!(unique.len(), 3, "{set:?} reuses a badge: {badges:?}");
+        }
+    }
+
+    #[test]
+    fn a_badge_reflects_the_id_it_was_built_from() {
+        use super::{source_glyph, source_span};
+        use crate::library::SongSource;
+        use crate::ui::glyphs::GlyphSet;
+
+        let theme = crate::theme::Theme::default();
+        let online = source_span("https://archive.org/download/x/y.flac", GlyphSet::Ascii, &theme);
+        assert_eq!(online.content, source_glyph(SongSource::Online, GlyphSet::Ascii));
+
+        let local = source_span("local:/music/a.flac", GlyphSet::Ascii, &theme);
+        assert_eq!(local.content, source_glyph(SongSource::Local, GlyphSet::Ascii));
     }
 }

@@ -1,5 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Rect};
+use ratatui::style::Style;
+use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Row, Table, TableState};
 
 use super::widgets::truncate;
@@ -31,7 +33,13 @@ pub fn draw(
             .map(|c| (c.kind, c.width))
             .collect()
     } else {
-        vec![(ColumnKind::Title, 78), (ColumnKind::Length, 22)]
+        // The side pane has no room for a column of its own, so the source
+        // badge rides along in front of the title.
+        vec![
+            (ColumnKind::Source, 8),
+            (ColumnKind::Title, 70),
+            (ColumnKind::Length, 22),
+        ]
     };
 
     let header = Row::new(
@@ -54,6 +62,15 @@ pub fn draw(
             let cells: Vec<Cell> = columns
                 .iter()
                 .map(|(kind, _)| {
+                    // The badge carries its own colour, so it is built as a
+                    // span rather than falling through to the row's style.
+                    if *kind == ColumnKind::Source {
+                        return Cell::from(Line::from(super::widgets::source_span(
+                            &song.id,
+                            app.config.glyphs,
+                            theme,
+                        )));
+                    }
                     let text = match kind {
                         ColumnKind::Artist => song.artist_or_unknown().to_string(),
                         ColumnKind::Title => song.title.clone(),
@@ -63,6 +80,7 @@ pub fn draw(
                         }
                         ColumnKind::Track => song.track.map(|t| t.to_string()).unwrap_or_default(),
                         ColumnKind::Year => song.year.map(|y| y.to_string()).unwrap_or_default(),
+                        ColumnKind::Source => unreachable!("handled above"),
                     };
                     Cell::from(text)
                 })
