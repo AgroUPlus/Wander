@@ -510,17 +510,19 @@ impl App {
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
-            let files = match cached {
-                Some(files) => files,
-                None => match crate::plugins::archive::api::item_files(&http, &item.identifier)
-                    .await
-                {
-                    Ok(files) => files,
-                    Err(err) => {
-                        let _ = loads.send(LoadEvent::ArchiveStreamReady(Err(format!("{err:#}"))));
-                        return;
+            let (files, cover_art) = match cached {
+                Some(files) => (files, None),
+                None => {
+                    match crate::plugins::archive::api::item_files_and_cover(&http, &item.identifier)
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(err) => {
+                            let _ = loads.send(LoadEvent::ArchiveStreamReady(Err(format!("{err:#}"))));
+                            return;
+                        }
                     }
-                },
+                }
             };
 
             let songs: Vec<Song> = files
@@ -537,12 +539,9 @@ impl App {
                         item.creator.clone()
                     }),
                     artist_id: None,
-                    // Archive renders a thumbnail for every item at a stable
-                    // URL, so online tracks get artwork like anything else.
-                    cover_art: Some(format!(
-                        "https://archive.org/services/img/{}",
-                        urlencoding::encode(&item.identifier)
-                    )),
+                    // Use real uploaded cover art if available, otherwise None
+                    // so the UI renders a clean placeholder instead of waveform lines.
+                    cover_art: cover_art.clone(),
                     duration: file.duration as u32,
                     bit_rate: 0,
                     track: Some(file.track.unwrap_or((idx + 1) as u32)),
@@ -574,10 +573,17 @@ impl App {
         );
 
         self.archive_plugin.working = true;
-        self.status_message = Some(format!(
-            "Downloading '{}'...",
-            crate::ui::widgets::truncate(&item.title, 35)
-        ));
+        let title_short = crate::ui::widgets::truncate(&item.title, 35);
+        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.add_operation(Operation {
+            id: "archive-dl".into(),
+            title: item.title.clone(),
+            kind: OperationKind::Download,
+            progress: None,
+            status: OperationStatus::Running,
+            details: Some("Downloading from archive.org...".into()),
+            started_at: std::time::Instant::now(),
+        });
 
         let http = self.http.clone();
         let loads = self.loads.clone();
@@ -757,10 +763,17 @@ impl App {
         );
 
         self.jamendo_plugin.working = true;
-        self.status_message = Some(format!(
-            "Downloading '{}'...",
-            crate::ui::widgets::truncate(&track.name, 35)
-        ));
+        let title_short = crate::ui::widgets::truncate(&track.name, 35);
+        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.add_operation(Operation {
+            id: "jamendo-dl".into(),
+            title: track.name.clone(),
+            kind: OperationKind::Download,
+            progress: None,
+            status: OperationStatus::Running,
+            details: Some("Downloading from Jamendo...".into()),
+            started_at: std::time::Instant::now(),
+        });
 
         let http = self.http.clone();
         let loads = self.loads.clone();
@@ -854,10 +867,17 @@ impl App {
         };
 
         self.nyaa_plugin.downloading = true;
-        self.status_message = Some(format!(
-            "Downloading '{}'...",
-            crate::ui::widgets::truncate(&item.title, 35)
-        ));
+        let title_short = crate::ui::widgets::truncate(&item.title, 35);
+        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.add_operation(Operation {
+            id: "nyaa-dl".into(),
+            title: item.title.clone(),
+            kind: OperationKind::Download,
+            progress: None,
+            status: OperationStatus::Running,
+            details: Some("Downloading torrent / file...".into()),
+            started_at: std::time::Instant::now(),
+        });
 
         let http = self.http.clone();
         let loads = self.loads.clone();

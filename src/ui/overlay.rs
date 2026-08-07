@@ -59,18 +59,91 @@ pub struct SetupState {
 /// The choices offered on first run, and where each one leads.
 pub const SETUP_CHOICES: &[(&str, &str)] = &[
     (
-        "A Navidrome / Subsonic server",
-        "Stream from your own server. You will need its URL and your login.",
+        "Subsonic / Navidrome Server",
+        "Stream your media collection from a Subsonic-compatible server.",
     ),
     (
-        "A folder of music on this computer",
-        "Play local files. wander scans the folder and reads their tags.",
+        "Local Music Library",
+        "Scan local folders on your device to read metadata & tags.",
     ),
     (
-        "Both",
-        "Browse and queue server tracks and local files together.",
+        "Hybrid Mode (Server + Local)",
+        "Merge remote server and local files into a unified library view.",
+    ),
+    (
+        "Explore Online Plugins",
+        "Stream & download free music via Internet Archive & Jamendo.",
     ),
 ];
+
+fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme) {
+    let width = (area.width * 4 / 5).clamp(50.min(area.width), 80);
+    let height = 22.min(area.height);
+    let rect = centered(area, width, height);
+    frame.render_widget(Clear, rect);
+
+    let block = Block::default()
+        .title(" WANDER • Quickstart Setup ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(theme.title());
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height < 6 {
+        return;
+    }
+
+    let ascii_logo = [
+        "██╗  ██╗██████╗ ███╗   ██╗██████╗ ███████╗██████╗ ",
+        "██║  ██║██╔══██╗████╗  ██║██╔══██╗██╔════╝██╔══██╗",
+        "██║  ██║██████╔╝██╔██╗ ██║██║  ██║█████╗  ██████╔╝",
+        "██║  ██║██╔══██╗██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗",
+        "╚█████╔╝██║  ██║██║ ╚████║██████╔╝███████╗██║  ██║",
+    ];
+
+    let mut lines = Vec::new();
+    for logo_line in ascii_logo {
+        lines.push(Line::from(Span::styled(logo_line, theme.title())));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("⚡ MISTRAL VIBE QUICKSTART ", theme.playing()),
+        Span::styled("•  Step 1 of 3: Choose Audio Source", theme.dim()),
+    ]));
+    lines.push(Line::from(""));
+
+    for (index, (label, detail)) in SETUP_CHOICES.iter().enumerate() {
+        let selected = index == state.selected;
+        let card_prefix = if selected { "❯ [" } else { "  [" };
+        let card_num = format!("Card {}", index + 1);
+        let card_suffix = "] ";
+
+        lines.push(Line::from(vec![
+            Span::styled(card_prefix, if selected { theme.title() } else { theme.dim() }),
+            Span::styled(card_num, if selected { theme.title() } else { theme.dim() }),
+            Span::styled(card_suffix, if selected { theme.title() } else { theme.dim() }),
+            Span::styled(
+                (*label).to_string(),
+                if selected { theme.selected() } else { theme.base() },
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("      {detail}"),
+            theme.dim(),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" [↑/k/↓/j] ", theme.playing()),
+        Span::styled("Select Option   ", theme.dim()),
+        Span::styled("[Enter] ", theme.playing()),
+        Span::styled("Proceed   ", theme.dim()),
+        Span::styled("[Esc] ", theme.playing()),
+        Span::styled("Skip Wizard", theme.dim()),
+    ]));
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
 
 /// What a palette row does when chosen.
 #[derive(Debug, Clone)]
@@ -291,59 +364,6 @@ pub fn draw(frame: &mut Frame, area: Rect, overlay: &Overlay, theme: &Theme, gly
         Overlay::Palette(state) => draw_palette(frame, area, state, theme, glyphs),
         Overlay::Setup(state) => draw_setup(frame, area, state, theme),
     }
-}
-
-fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme) {
-    let width = (area.width * 3 / 4).clamp(40.min(area.width), 72);
-    let height = (SETUP_CHOICES.len() as u16 * 3 + 7).min(area.height);
-    let rect = centered(area, width, height);
-    frame.render_widget(Clear, rect);
-
-    let block = popup_block("Welcome to wander", theme);
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-    if inner.height < 3 {
-        return;
-    }
-
-    let mut lines = vec![
-        Line::from(Span::styled("Where is your music?", theme.title())),
-        Line::from(""),
-    ];
-
-    for (index, (label, detail)) in SETUP_CHOICES.iter().enumerate() {
-        let selected = index == state.selected;
-        lines.push(Line::from(vec![
-            Span::styled(
-                if selected { "❯ " } else { "  " },
-                if selected { theme.title() } else { theme.dim() },
-            ),
-            Span::styled(
-                (*label).to_string(),
-                if selected {
-                    theme.selected()
-                } else {
-                    theme.base()
-                },
-            ),
-        ]));
-        lines.push(Line::from(Span::styled(
-            format!("    {detail}"),
-            theme.dim(),
-        )));
-        lines.push(Line::from(""));
-    }
-
-    lines.push(Line::from(vec![
-        Span::styled("[↑/↓] ", theme.playing()),
-        Span::styled("Choose   ", theme.dim()),
-        Span::styled("[Enter] ", theme.playing()),
-        Span::styled("Continue   ", theme.dim()),
-        Span::styled("[Esc] ", theme.playing()),
-        Span::styled("Skip", theme.dim()),
-    ]));
-
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_palette(

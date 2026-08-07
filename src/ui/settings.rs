@@ -60,6 +60,7 @@ pub enum SettingItem {
     ServerPassword,
     StreamFormat,
     TestConnection,
+    ReRunSetup,
 
     // Local library
     LocalPath(usize),
@@ -121,7 +122,8 @@ impl SettingItem {
             | Self::ServerUsername
             | Self::ServerPassword
             | Self::StreamFormat
-            | Self::TestConnection => Section::Server,
+            | Self::TestConnection
+            | Self::ReRunSetup => Section::Server,
 
             Self::LocalPath(_)
             | Self::AddLocalPath
@@ -207,6 +209,7 @@ impl SettingItem {
             Self::ServerPassword => "Password".into(),
             Self::StreamFormat => "Audio format".into(),
             Self::TestConnection => "Test connection".into(),
+            Self::ReRunSetup => "Re-run Quickstart Wizard".into(),
 
             Self::LocalPath(index) => format!("Music folder {}", index + 1),
             Self::AddLocalPath => "Add music folder".into(),
@@ -267,6 +270,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::ServerPassword,
         SettingItem::StreamFormat,
         SettingItem::TestConnection,
+        SettingItem::ReRunSetup,
     ];
 
     rows.extend((0..config.local.paths.len()).map(SettingItem::LocalPath));
@@ -351,6 +355,7 @@ fn value_of(app: &App, item: SettingItem) -> String {
             .connection_status
             .clone()
             .unwrap_or_else(|| "[Enter to check the server]".into()),
+        SettingItem::ReRunSetup => "[Enter to launch setup wizard]".into(),
 
         SettingItem::LocalPath(index) => config
             .local

@@ -228,11 +228,13 @@ impl Library for MergedLibrary {
         // rather than being handed to a server that has never heard of it.
         if cover_id.starts_with("http://") || cover_id.starts_with("https://") {
             let http = reqwest::Client::builder()
-                .timeout(Duration::from_secs(20))
+                .connect_timeout(Duration::from_secs(15))
+                .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_default();
             let response = http
                 .get(cover_id)
+                .header("User-Agent", "wander-tui/0.1 (https://archive.org; music player)")
                 .send()
                 .await
                 .context("fetching cover art")?;

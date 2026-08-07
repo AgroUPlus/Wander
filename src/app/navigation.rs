@@ -10,6 +10,7 @@ pub fn focus_order(tab: Tab, library_mode: LibraryMode, side_queue: bool) -> Vec
         Tab::Queue => vec![Pane::Queue],
         Tab::Library => library_mode.panes().to_vec(),
         Tab::Online => vec![Pane::Online],
+        Tab::Operations => vec![Pane::Operations],
         Tab::Settings => vec![Pane::Settings],
     };
     // The Up Next pane is drawn to the right of everything else, so it is the
@@ -85,7 +86,7 @@ impl App {
     }
 
     pub(crate) fn cycle_tab(&mut self, delta: isize) {
-        let available = Tab::available(&self.config);
+        let available = self.available_tabs();
         let current = available.iter().position(|t| *t == self.tab).unwrap_or(0) as isize;
         let count = available.len() as isize;
         let next = (current + delta).rem_euclid(count) as usize;
@@ -147,6 +148,7 @@ impl App {
                 OnlineSource::Jamendo => self.jamendo_plugin.results.len(),
             },
             Pane::Settings => crate::ui::settings::rows(&self.config).len(),
+            Pane::Operations => self.operations.len(),
             Pane::Home => crate::ui::home::mix_count(self),
             // Synced lyrics scroll with playback and have no cursor; unsynced
             // ones have nothing to follow, so they are scrolled by hand.
@@ -180,6 +182,7 @@ impl App {
                 OnlineSource::Jamendo => &mut self.jamendo_plugin.selection,
             },
             Pane::Settings => &mut self.settings_sel,
+            Pane::Operations => &mut self.operations_sel,
             Pane::Home => &mut self.home_sel,
         }
     }
@@ -243,8 +246,8 @@ impl App {
             Pane::PlaylistSongs => (self.playlist_songs.clone(), self.playlist_song_sel.index),
             Pane::Tracks => (self.tracks.clone(), self.track_sel.index),
             Pane::Favorites => (self.favorites.clone(), self.favorite_sel.index),
-            // Nothing selectable: lyrics, settings, home & online track their own state.
-            Pane::Lyrics | Pane::Settings | Pane::Home | Pane::Online => (Vec::new(), 0),
+            // Nothing selectable: lyrics, settings, home, online & operations track their own state.
+            Pane::Lyrics | Pane::Settings | Pane::Home | Pane::Online | Pane::Operations => (Vec::new(), 0),
         }
     }
 

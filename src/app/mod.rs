@@ -216,6 +216,11 @@ pub struct App {
     last_state_save: Instant,
 
     last_click: Option<(Region, Instant)>,
+
+    pub operations: Vec<Operation>,
+    pub notifications: Vec<Notification>,
+    pub operations_sel: Selection,
+    next_notification_id: u64,
 }
 
 impl App {
@@ -302,7 +307,7 @@ impl App {
             cover_resized: None,
             lyrics: Default::default(),
             http: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(20))
+                .connect_timeout(std::time::Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
             lyrics_pending: false,
@@ -335,6 +340,10 @@ impl App {
             state_dirty: false,
             last_state_save: Instant::now(),
             last_click: None,
+            operations: Vec::new(),
+            notifications: Vec::new(),
+            operations_sel: Selection::default(),
+            next_notification_id: 0,
         };
         if !keybinding_problems.is_empty() {
             app.status_message = Some(format!("config [keys]: {}", keybinding_problems.join("; ")));
@@ -344,5 +353,80 @@ impl App {
         app.history_bytes = crate::history::size();
         app.stats = crate::history::stats(&app.history, 5);
         Ok(app)
+    }
+
+    pub fn has_active_operations(&self) -> bool {
+        self.operations.iter().any(|op| op.status == OperationStatus::Running)
+    }
+
+    pub fn active_operations_count(&self) -> usize {
+        self.operations.iter().filter(|op| op.status == OperationStatus::Running).count()
+    }
+
+    pub fn available_tabs(&self) -> Vec<Tab> {
+        let mut tabs = Tab::available(&self.config);
+        if self.has_active_operations() || self.tab == Tab::Operations {
+            if let Some(pos) = tabs.iter().position(|t| *t == Tab::Settings) {
+                tabs.insert(pos, Tab::Operations);
+            } else {
+                tabs.push(Tab::Operations);
+            }
+        }
+        tabs
+    }
+
+    pub fn push_notification(&mut self, level: NotificationLevel, message: impl Into<String>) {
+        self.next_notification_id += 1;
+        let msg = message.into();
+        self.status_message = Some(msg.clone());
+        self.notifications.push(Notification {
+            id: self.next_notification_id,
+            level,
+            message: msg,
+            created_at: Instant::now(),
+            duration_secs: 6,
+        });
+        if self.notifications.len() > 50 {
+            self.notifications.remove(0);
+        }
+    }
+
+    pub fn add_operation(&mut self, op: Operation) {
+        self.operations.push(op);
+        self.operations_sel.clamp(self.operations.len());
+    }
+
+    pub fn update_operation_progress(&mut self, id: &str, progress: f32, details: Option<String>) {
+        if let Some(op) = self.operations.iter_mut().find(|o| o.id == id) {
+            op.progress = Some(progress);
+            if details.is_some() {
+                op.details = details;
+            }
+        }
+    }
+
+    pub fn finish_operation(&mut self, id: &str, status: OperationStatus) {
+        if let Some(op) = self.operations.iter_mut().find(|o| o.id == id) {
+            op.status = status;
+        }
+    }
+
+    pub fn cancel_operation(&mut self, index: usize) {
+        if let Some(op) = self.operations.get_mut(index) {
+            if op.status == OperationStatus::Running {
+                op.status = OperationStatus::Cancelled;
+            }
+        }
+        if index == 0 && self.plugin_job.is_some() {
+            self.cancel_plugin_job();
+        }
+    }
+
+    pub fn clear_completed_operations(&mut self) {
+        self.operations.retain(|op| op.status == OperationStatus::Running);
+        self.operations_sel.clamp(self.operations.len());
+        if !self.has_active_operations() && self.tab == Tab::Operations {
+            self.go_to_tab(Tab::Home);
+        }
     }
 }

@@ -116,9 +116,15 @@ async fn main() -> Result<()> {
     }
     app.refresh_password_state();
     app.bootstrap();
+    let force_quickstart = std::env::args().any(|arg| arg == "--quickstart" || arg == "--setup");
+
     // With nothing configured, the old build exited here with instructions to
     // hand-write a config file. Now it asks instead.
-    app.maybe_start_setup();
+    if force_quickstart {
+        app.overlay = Some(ui::overlay::Overlay::Setup(Default::default()));
+    } else {
+        app.maybe_start_setup();
+    }
     if config_scan_on_start {
         app.rescan_local_library();
     }

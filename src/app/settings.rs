@@ -23,7 +23,15 @@ impl App {
     /// chosen path, so the next keypress is already the useful one.
     pub(crate) fn begin_setup(&mut self, choice: usize) {
         use crate::ui::settings::SettingItem;
-        // 1 is "local folder"; 0 and 2 both begin with the server.
+        if choice == 3 {
+            self.go_to_tab(Tab::Online);
+            self.push_notification(
+                NotificationLevel::Info,
+                "Explore free music plugins on Internet Archive and Jamendo!",
+            );
+            return;
+        }
+
         let target = if choice == 1 {
             SettingItem::AddLocalPath
         } else {
@@ -38,11 +46,11 @@ impl App {
         {
             self.settings_sel.index = index;
         }
-        self.status_message = Some(match choice {
+        let msg = match choice {
             1 => "Press Enter to type the path to your music folder".to_string(),
             _ => "Press Enter to type your server URL, then fill in the rows below".to_string(),
-        });
-        // Open the field straight away: the user already said what they want.
+        };
+        self.push_notification(NotificationLevel::Info, msg);
         self.activate_setting();
     }
 
@@ -305,6 +313,7 @@ impl App {
             | SettingItem::ServerUsername
             | SettingItem::ServerPassword
             | SettingItem::TestConnection
+            | SettingItem::ReRunSetup
             | SettingItem::LocalPath(_)
             | SettingItem::AddLocalPath
             | SettingItem::LocalPlaylistDir
@@ -390,6 +399,7 @@ impl App {
 
         match item {
             SettingItem::TestConnection => self.test_connection(),
+            SettingItem::ReRunSetup => self.overlay = Some(Overlay::Setup(Default::default())),
             SettingItem::Rescan => self.rescan_local_library(),
             SettingItem::ClearQueue => {
                 self.snapshot_queue();
@@ -657,6 +667,15 @@ impl App {
             }
             Err(err) => self.connection_status = Some(format!("failed: {err:#}")),
             Ok(Some(remote)) => {
+                self.add_operation(Operation {
+                    id: "server-ping".into(),
+                    title: "Subsonic Connection Test".into(),
+                    kind: OperationKind::ConnectionTest,
+                    progress: None,
+                    status: OperationStatus::Running,
+                    details: Some("Pinging server...".into()),
+                    started_at: std::time::Instant::now(),
+                });
                 let loads = self.loads.clone();
                 tokio::spawn(async move {
                     let result = match remote.client().ping().await {
@@ -684,6 +703,16 @@ impl App {
         let roots = self.config.local.paths.clone();
         let loads = self.loads.clone();
         self.scan_status = Some("scanning…".to_string());
+        self.push_notification(NotificationLevel::Info, "Started scanning local music folders...");
+        self.add_operation(Operation {
+            id: "local-scan".into(),
+            title: "Local Library Scan".into(),
+            kind: OperationKind::LocalScan,
+            progress: None,
+            status: OperationStatus::Running,
+            details: Some("Scanning music folders...".into()),
+            started_at: std::time::Instant::now(),
+        });
 
         tokio::task::spawn_blocking(move || {
             let previous = local.index();

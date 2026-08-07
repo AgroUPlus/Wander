@@ -25,13 +25,14 @@
 
 ## 📸 Interface Overview
 
-Wander features four main interactive tabs and a full-screen focus view:
+Wander features four main interactive tabs, a dynamic Operations manager, and a full-screen focus view:
 
 | View | Description |
 | :--- | :--- |
 | **`1` Home** | Listening statistics, top played artists/tracks, and one-press smart mixes. |
 | **`2` Library** | Fast fuzzy search across artists, albums, tracks, and genres (local & remote). |
 | **`3` Queue** | Interactive queue manager with drag-and-drop mouse support, shuffle, and repeat modes. |
+| **`⚡` Operations** | Dynamic tab showing background downloads, library rescans, ETA gauges, and log history. |
 | **`4` Settings** | In-app visual editor for server connections, music paths, theme colors, and UI layout. |
 | **`F` Focus Mode** | Full-screen presentation mode featuring large cover art, lyrics, and real-time spectrum visualiser. |
 
@@ -56,10 +57,10 @@ cp target/release/wander ~/.local/bin/
 
 ### First Run & Setup
 
-Simply launch `wander` from your shell or application launcher:
+Simply launch `wander` (or `wander --quickstart`) from your shell or application launcher:
 
 ```bash
-wander
+wander --quickstart
 ```
 
 1. On initial startup, Wander guides you through configuring your **Navidrome server URL**, **username**, and/or **local music directories**.

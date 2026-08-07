@@ -3,10 +3,12 @@ use super::types::*;
 use super::*;
 use crate::keymap::Action;
 use crate::ui::{Hits, Region};
-use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 impl App {
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        let no_mods = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+
         if self.show_help {
             // Any key dismisses help, so it never traps the user.
             self.show_help = false;
@@ -37,8 +39,6 @@ impl App {
         }
 
         if self.tab == Tab::Online {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            let no_mods = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
             // Switching sources is shared; everything else belongs to whichever
             // plugin currently owns the tab.
             if key.code == KeyCode::Char('o') && no_mods {
@@ -107,6 +107,17 @@ impl App {
                         return;
                     }
                 }
+            }
+        }
+
+        if self.focus == Pane::Operations {
+            if key.code == KeyCode::Char('c') && no_mods {
+                self.cancel_operation(self.operations_sel.index);
+                return;
+            }
+            if key.code == KeyCode::Char('x') && no_mods {
+                self.clear_completed_operations();
+                return;
             }
         }
 
@@ -272,7 +283,7 @@ impl App {
                 }
             }
             Action::Tab(index) => {
-                let available = Tab::available(&self.config);
+                let available = self.available_tabs();
                 if let Some(tab) = available.get(index) {
                     self.go_to_tab(*tab);
                 }
@@ -502,7 +513,7 @@ impl App {
 
                 match region {
                     Region::Tab(index) => {
-                        let available = Tab::available(&self.config);
+                        let available = self.available_tabs();
                         if let Some(tab) = available.get(index) {
                             self.go_to_tab(*tab);
                         }

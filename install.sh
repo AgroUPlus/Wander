@@ -69,7 +69,11 @@ Optional Hyprland integration — add to ~/.config/hypr/hyprland.conf:
     # Super+M toggles it
     bind = SUPER, M, exec, pgrep -x wander >/dev/null && hyprctl dispatch closewindow class:wander || foot -a wander wander
 
-First run needs a config at ~/.config/wander/config.toml:
+Quickstart setup wizard:
+
+    wander --quickstart
+
+Or configure manually at ~/.config/wander/config.toml:
 
     [server]
     url = "https://navidrome.example.com"

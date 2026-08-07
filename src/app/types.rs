@@ -20,20 +20,20 @@ pub struct FrameShape {
 pub enum Tab {
     Home,
     Queue,
-    /// Artists, albums, tracks and playlists are all views of one library, not
-    /// separate destinations — an album is always reachable through its artist.
     Library,
     Online,
+    Operations,
     Settings,
 }
 
 impl Tab {
     #[allow(dead_code)]
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Home,
         Tab::Queue,
         Tab::Library,
         Tab::Online,
+        Tab::Operations,
         Tab::Settings,
     ];
 
@@ -58,6 +58,7 @@ impl Tab {
             Tab::Queue => "Queue",
             Tab::Library => "Library",
             Tab::Online => "Online",
+            Tab::Operations => "Operations",
             Tab::Settings => "Settings",
         }
     }
@@ -158,6 +159,7 @@ pub enum Pane {
     Favorites,
     Lyrics,
     Online,
+    Operations,
     Settings,
 }
 
@@ -295,3 +297,74 @@ impl Selection {
         self.offset = 0;
     }
 }
+
+/// A background task or operation running in the application.
+#[derive(Debug, Clone)]
+pub struct Operation {
+    pub id: String,
+    pub title: String,
+    pub kind: OperationKind,
+    pub progress: Option<f32>, // 0.0 to 1.0
+    pub status: OperationStatus,
+    pub details: Option<String>,
+    pub started_at: std::time::Instant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationKind {
+    Download,
+    LocalScan,
+    Search,
+    ConnectionTest,
+    LyricFetch,
+}
+
+impl OperationKind {
+    pub fn badge(&self) -> &'static str {
+        match self {
+            OperationKind::Download => "DOWNLOAD",
+            OperationKind::LocalScan => "SCAN",
+            OperationKind::Search => "SEARCH",
+            OperationKind::ConnectionTest => "CONNECT",
+            OperationKind::LyricFetch => "LYRICS",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperationStatus {
+    Running,
+    Completed,
+    Failed(String),
+    Cancelled,
+}
+
+/// Rich toast / banner notification item.
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub id: u64,
+    pub level: NotificationLevel,
+    pub message: String,
+    pub created_at: std::time::Instant,
+    pub duration_secs: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl NotificationLevel {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            NotificationLevel::Info => "ℹ",
+            NotificationLevel::Success => "✓",
+            NotificationLevel::Warning => "⚠",
+            NotificationLevel::Error => "✕",
+        }
+    }
+}
+

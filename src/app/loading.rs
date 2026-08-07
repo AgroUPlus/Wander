@@ -211,13 +211,16 @@ impl App {
             }
             // Handed to the renderer, which owns the protocol.
             LoadEvent::CoverResized(response) => self.cover_resized = Some(response),
-            LoadEvent::ConnectionTested(result) => self.connection_status = Some(result),
+            LoadEvent::ConnectionTested(result) => {
+                self.connection_status = Some(result.clone());
+                self.push_notification(NotificationLevel::Info, format!("Server test: {result}"));
+                self.finish_operation("server-ping", OperationStatus::Completed);
+            }
             LoadEvent::LocalScanned { songs, albums } => {
                 self.scan_status = Some(format!("{songs} songs, {albums} albums"));
-                self.status_message =
-                    Some(format!("Local library: {songs} songs in {albums} albums"));
-                // The scan may have added or removed tracks, so anything drawn
-                // from the old index is now stale.
+                let msg = format!("Local library: {songs} songs in {albums} albums");
+                self.push_notification(NotificationLevel::Info, msg);
+                self.finish_operation("local-scan", OperationStatus::Completed);
                 self.invalidate_library();
             }
             LoadEvent::Cover {
@@ -229,8 +232,6 @@ impl App {
                     self.cover_bytes = Some(bytes);
                     self.cover_dirty = true;
                     self.cover_generation += 1;
-                    // Artwork with no usable colour leaves the preset standing
-                    // rather than inventing an accent for it.
                     if palette.is_some() {
                         self.cover_palette = palette;
                         self.refresh_theme();
@@ -238,7 +239,6 @@ impl App {
                 }
             }
             LoadEvent::Lyrics { song_id, lyrics } => {
-                // Discard results for a track that is no longer playing.
                 if self.lyrics_song.as_deref() == Some(song_id.as_str()) {
                     self.lyrics_cache.put(&song_id, &lyrics);
                     self.lyrics = *lyrics;
@@ -252,13 +252,10 @@ impl App {
                     Ok(items) => {
                         self.archive_plugin.results = items;
                         self.archive_plugin.selection.reset();
-                        // A new result set makes the old track lists dead
-                        // weight; dropping them keeps the cache bounded by one
-                        // search rather than by the session.
                         self.archive_plugin.files.clear();
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Archive search error: {err}"));
+                        self.push_notification(NotificationLevel::Error, format!("Archive search error: {err}"));
                     }
                 }
             }
@@ -270,7 +267,7 @@ impl App {
                         self.jamendo_plugin.selection.reset();
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Jamendo search error: {err}"));
+                        self.push_notification(NotificationLevel::Error, format!("Jamendo search error: {err}"));
                     }
                 }
             }
@@ -278,16 +275,19 @@ impl App {
                 self.jamendo_plugin.working = false;
                 match result {
                     Ok(path) => {
-                        self.status_message = Some(format!(
+                        let msg = format!(
                             "Downloaded '{}' to {}",
                             crate::ui::widgets::truncate(&title, 35),
                             path.display()
-                        ));
+                        );
+                        self.push_notification(NotificationLevel::Success, msg);
+                        self.finish_operation("jamendo-dl", OperationStatus::Completed);
                         self.rescan_local_library();
                     }
                     Err(err) => {
-                        self.status_message =
-                            Some(format!("Jamendo download failed for '{title}': {err}"));
+                        let msg = format!("Jamendo download failed for '{title}': {err}");
+                        self.push_notification(NotificationLevel::Error, msg.clone());
+                        self.finish_operation("jamendo-dl", OperationStatus::Failed(err));
                     }
                 }
             }
@@ -300,21 +300,21 @@ impl App {
                 match result {
                     Ok(songs) => {
                         if songs.is_empty() {
-                            self.status_message =
-                                Some("No playable audio in this Archive item".to_string());
+                            self.push_notification(NotificationLevel::Warning, "No playable audio in this Archive item");
                             return;
                         }
                         let first_title = songs[0].title.clone();
                         let count = songs.len();
                         self.snapshot_queue();
                         self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
-                        self.status_message = Some(format!(
+                        let msg = format!(
                             "Streaming '{}' ({count} track(s) from archive.org)",
                             crate::ui::widgets::truncate(&first_title, 35)
-                        ));
+                        );
+                        self.push_notification(NotificationLevel::Info, msg);
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Archive streaming error: {err}"));
+                        self.push_notification(NotificationLevel::Error, format!("Archive streaming error: {err}"));
                     }
                 }
             }
@@ -322,21 +322,28 @@ impl App {
                 self.archive_plugin.working = false;
                 match result {
                     Ok(path) => {
-                        self.status_message = Some(format!(
+                        let msg = format!(
                             "Downloaded '{}' to {}",
                             crate::ui::widgets::truncate(&title, 35),
                             path.display()
-                        ));
+                        );
+                        self.push_notification(NotificationLevel::Success, msg);
+                        self.finish_operation("archive-dl", OperationStatus::Completed);
                         self.rescan_local_library();
                     }
                     Err(err) => {
-                        self.status_message =
-                            Some(format!("Archive download failed for '{title}': {err}"));
+                        let msg = format!("Archive download failed for '{title}': {err}");
+                        self.push_notification(NotificationLevel::Error, msg.clone());
+                        self.finish_operation("archive-dl", OperationStatus::Failed(err));
                     }
                 }
             }
             LoadEvent::PluginStatus(message) => {
-                self.status_message = Some(message);
+                self.status_message = Some(message.clone());
+                // Update running operation progress details if any exist
+                if let Some(op) = self.operations.iter_mut().find(|o| o.status == OperationStatus::Running) {
+                    op.details = Some(message);
+                }
             }
             #[cfg(feature = "nyaa")]
             LoadEvent::NyaaResults(result) => {
@@ -347,7 +354,7 @@ impl App {
                         self.nyaa_plugin.selection.reset();
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Nyaa search error: {err}"));
+                        self.push_notification(NotificationLevel::Error, format!("Nyaa search error: {err}"));
                     }
                 }
             }
@@ -357,7 +364,7 @@ impl App {
                 match result {
                     Ok(songs) => {
                         if songs.is_empty() {
-                            self.status_message = Some("No audio tracks found to stream".to_string());
+                            self.push_notification(NotificationLevel::Warning, "No audio tracks found to stream");
                             return;
                         }
                         let first_title = songs[0].title.clone();
@@ -367,13 +374,14 @@ impl App {
                             songs,
                             index: 0,
                         });
-                        self.status_message = Some(format!(
+                        let msg = format!(
                             "Streaming '{}' ({count} track(s) queued in Wander)",
                             crate::ui::widgets::truncate(&first_title, 35)
-                        ));
+                        );
+                        self.push_notification(NotificationLevel::Info, msg);
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Streaming error: {err}"));
+                        self.push_notification(NotificationLevel::Error, format!("Streaming error: {err}"));
                     }
                 }
             }
@@ -383,29 +391,33 @@ impl App {
                 match result {
                     Ok(path) => {
                         let is_torrent = path.extension().map(|e| e == "torrent").unwrap_or(false);
-                        if is_torrent {
+                        let msg = if is_torrent {
                             let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
-                            self.status_message = Some(format!(
+                            format!(
                                 "Downloaded '{}.torrent' to {} (Opened in system client)",
                                 crate::ui::widgets::truncate(&title, 30),
                                 path.display()
-                            ));
+                            )
                         } else {
-                            self.status_message = Some(format!(
+                            format!(
                                 "Downloaded '{}' to {}",
                                 crate::ui::widgets::truncate(&title, 35),
                                 path.display()
-                            ));
-                        }
+                            )
+                        };
+                        self.push_notification(NotificationLevel::Success, msg);
+                        self.finish_operation("nyaa-dl", OperationStatus::Completed);
                         self.rescan_local_library();
                     }
                     Err(err) => {
-                        self.status_message = Some(format!("Download failed for '{title}': {err}"));
+                        let msg = format!("Download failed for '{title}': {err}");
+                        self.push_notification(NotificationLevel::Error, msg.clone());
+                        self.finish_operation("nyaa-dl", OperationStatus::Failed(err));
                     }
                 }
             }
             LoadEvent::Error(message) => {
-                self.status_message = Some(message);
+                self.push_notification(NotificationLevel::Error, message);
             }
         }
     }

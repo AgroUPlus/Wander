@@ -4,6 +4,7 @@ pub mod help;
 pub mod home;
 pub mod library;
 pub mod lyrics;
+pub mod operations;
 pub mod overlay;
 pub mod player_bar;
 pub mod queue;
@@ -386,6 +387,7 @@ fn draw_body(
                 crate::plugins::jamendo::ui::draw(frame, content, app, theme, hits)
             }
         },
+        Tab::Operations => operations::draw(frame, content, app, theme, hits),
         Tab::Settings => settings::draw(frame, content, app, theme, hits),
     }
 
@@ -426,6 +428,13 @@ fn draw_body(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::Theme) {
+    let active_ops = app.active_operations_count();
+    let ops_badge = if active_ops > 0 {
+        format!("  [⚡ {active_ops} active job(s)]")
+    } else {
+        String::new()
+    };
+
     let (text, style) = if let Some(msg) = &app.status_message {
         let single_line = msg.replace('\n', " • ").replace('\r', "");
         let st = if msg.contains("failed") || msg.contains("error") || msg.contains("limit") || msg.contains("Err") {
@@ -433,13 +442,13 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::T
         } else {
             theme.selected()
         };
-        (format!("⚡ {}", single_line), st)
+        (format!("⚡ {single_line}{ops_badge}"), st)
     } else {
         let radio_active = app.player.queue.lock().unwrap().radio;
         let radio_badge = if radio_active { "  •  Auto-Mix ON" } else { "" };
         (
             format!(
-                "space play/pause  •  n/p skip  •  a queue  •  / go to anything  •  m library view  •  F focus  •  C-h keys{radio_badge}"
+                "space play/pause  •  n/p skip  •  a queue  •  / go to anything  •  m library view  •  F focus{radio_badge}{ops_badge}"
             ),
             theme.dim(),
         )

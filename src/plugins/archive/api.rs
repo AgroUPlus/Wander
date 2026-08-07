@@ -205,12 +205,11 @@ fn flatten_field(value: &serde_json::Value) -> String {
     }
 }
 
-/// Fetch an item's playable files, best format first.
-///
-/// Archive usually stores several derivatives of the same recording (FLAC plus
-/// an MP3 and an Ogg transcode). Returning all of them would queue every track
-/// three times, so only the best available format is kept.
-pub async fn item_files(client: &Client, identifier: &str) -> Result<Vec<ArchiveFile>> {
+/// Fetch an item's playable files and best available cover image URL.
+pub async fn item_files_and_cover(
+    client: &Client,
+    identifier: &str,
+) -> Result<(Vec<ArchiveFile>, Option<String>)> {
     let url = format!(
         "https://archive.org/metadata/{}",
         urlencoding::encode(identifier)
@@ -239,7 +238,89 @@ pub async fn item_files(client: &Client, identifier: &str) -> Result<Vec<Archive
     if files.is_empty() {
         anyhow::bail!("No playable audio files in this item");
     }
-    Ok(files)
+
+    let cover_art = parse_metadata_cover_art(&body, identifier);
+    Ok((files, cover_art))
+}
+
+pub async fn item_files(client: &Client, identifier: &str) -> Result<Vec<ArchiveFile>> {
+    item_files_and_cover(client, identifier)
+        .await
+        .map(|(files, _)| files)
+}
+
+/// Try to extract an explicit cover image file from item metadata.
+/// Returns None if no real cover image file is present (avoiding auto-generated waveform thumbnails).
+pub fn parse_metadata_cover_art(body: &serde_json::Value, identifier: &str) -> Option<String> {
+    let entries = body.get("files")?.as_array()?;
+
+    // 1. Explicit cover image file uploaded by the poster (e.g. cover.jpg, folder.jpg, front.jpg)
+    let explicit_cover = entries.iter().find_map(|entry| {
+        let name = entry.get("name")?.as_str()?;
+        let lower = name.to_lowercase();
+        if (lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png"))
+            && !lower.contains("spectrogram")
+            && !lower.contains("__ia_thumb")
+            && !lower.contains(".thumbs/")
+            && (lower.contains("cover")
+                || lower.contains("folder")
+                || lower.contains("front")
+                || lower.contains("artwork")
+                || lower.contains("album"))
+        {
+            Some(name.to_string())
+        } else {
+            None
+        }
+    });
+
+    if let Some(name) = explicit_cover {
+        let encoded: Vec<String> = name
+            .split('/')
+            .map(|segment| urlencoding::encode(segment).into_owned())
+            .collect();
+        return Some(format!(
+            "https://archive.org/download/{}/{}",
+            urlencoding::encode(identifier),
+            encoded.join("/")
+        ));
+    }
+
+    // 2. Any other general image file (JPEG or PNG) that is not a waveform/spectrogram derivative
+    let general_image = entries.iter().find_map(|entry| {
+        let name = entry.get("name")?.as_str()?;
+        let lower = name.to_lowercase();
+        let format = entry
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_lowercase();
+        if (lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".png"))
+            && !lower.contains("spectrogram")
+            && !lower.contains("__ia_thumb")
+            && !lower.contains(".thumbs/")
+            && format != "spectrogram"
+            && format != "thumb"
+        {
+            Some(name.to_string())
+        } else {
+            None
+        }
+    });
+
+    if let Some(name) = general_image {
+        let encoded: Vec<String> = name
+            .split('/')
+            .map(|segment| urlencoding::encode(segment).into_owned())
+            .collect();
+        return Some(format!(
+            "https://archive.org/download/{}/{}",
+            urlencoding::encode(identifier),
+            encoded.join("/")
+        ));
+    }
+
+    None
 }
 
 pub fn parse_metadata_files(body: &serde_json::Value) -> Vec<ArchiveFile> {
@@ -477,5 +558,31 @@ mod tests {
             files[0].stream_url("some item"),
             "https://archive.org/download/some%20item/a/b%20c.mp3"
         );
+    }
+
+    #[test]
+    fn extracts_real_cover_art_and_ignores_waveforms() {
+        let body_with_cover: serde_json::Value = serde_json::from_str(
+            r#"{"files":[
+                {"name":"t01.flac","format":"Flac"},
+                {"name":"cover.jpg","format":"JPEG"},
+                {"name":"__ia_thumb.jpg","format":"Item Tile"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_metadata_cover_art(&body_with_cover, "test-item"),
+            Some("https://archive.org/download/test-item/cover.jpg".to_string())
+        );
+
+        let body_waveform_only: serde_json::Value = serde_json::from_str(
+            r#"{"files":[
+                {"name":"t01.flac","format":"Flac"},
+                {"name":"t01_spectrogram.png","format":"Spectrogram"},
+                {"name":"__ia_thumb.jpg","format":"Item Tile"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(parse_metadata_cover_art(&body_waveform_only, "test-item"), None);
     }
 }

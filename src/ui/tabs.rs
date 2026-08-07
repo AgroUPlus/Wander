@@ -21,9 +21,18 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut 
     let mut spans = Vec::new();
     let mut x = inner.x;
 
-    let available = Tab::available(&app.config);
+    let available = app.available_tabs();
     for (index, tab) in available.iter().enumerate() {
-        let label = format!("  {}  ", tab.title());
+        let label = if *tab == Tab::Operations {
+            let active_count = app.active_operations_count();
+            if active_count > 0 {
+                format!("  ⚡ Operations ({active_count})  ")
+            } else {
+                format!("  ⚡ Operations  ")
+            }
+        } else {
+            format!("  {}  ", tab.title())
+        };
         let width = label.chars().count() as u16;
 
         let style = if *tab == app.tab {
