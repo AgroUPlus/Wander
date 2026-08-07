@@ -11,6 +11,10 @@
 
 ---
 
+<img width="1279" height="719" alt="image" src="https://github.com/user-attachments/assets/fa2726d5-1eea-41a5-bc82-6cf3fecf3165" />
+<img width="1279" height="719" alt="image" src="https://github.com/user-attachments/assets/592c14b0-25c6-494d-ad24-a87513a83b44" />
+
+
 ## ⚡ Highlights
 
 - **Unified Local & Remote Library**: Mix local MP3/FLAC/Opus files with streamed Navidrome tracks seamlessly in the same queue without playback gaps.
