@@ -46,7 +46,7 @@ Wander features four main interactive tabs, a dynamic Operations manager, and a 
 
 ### Installation
 
-Run the provided installation script to build and install Wander to `/usr/bin`, along with its desktop entry and icon:
+Run the provided installation script to build and install Wander to `~/.local/bin`, along with its desktop entry and icon:
 
 ```bash
 ./install.sh
@@ -56,7 +56,7 @@ Alternatively, build manually using Cargo:
 
 ```bash
 cargo build --release
-sudo cp target/release/wander /usr/bin/
+cp target/release/wander ~/.local/bin/
 ```
 
 ### First Run & Setup

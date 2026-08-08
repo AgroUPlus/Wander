@@ -5,22 +5,63 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Ensure cargo is in PATH if installed in standard ~/.cargo location
-if ! command -v cargo >/dev/null 2>&1; then
-  if [ -f "$HOME/.cargo/env" ]; then
-    source "$HOME/.cargo/env"
-  elif [ -d "$HOME/.cargo/bin" ]; then
-    export PATH="$HOME/.cargo/bin:$PATH"
-  fi
+# Target PREFIX: /usr if run via sudo, ~/.local if run as regular user
+if [ "$(id -u)" -eq 0 ]; then
+  PREFIX="${PREFIX:-/usr}"
+else
+  PREFIX="${PREFIX:-${HOME}/.local}"
 fi
 
-PREFIX="${PREFIX:-/usr}"
 BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
 APP_DIR="${APP_DIR:-${PREFIX}/share/applications}"
 ICON_DIR="${ICON_DIR:-${PREFIX}/share/icons/hicolor/scalable/apps}"
 
-echo "==> Building (release)"
-cargo build --release
+# Locate cargo for current user or SUDO_USER
+find_cargo() {
+  if command -v cargo >/dev/null 2>&1; then
+    command -v cargo
+    return 0
+  fi
+  if [ -f "$HOME/.cargo/env" ]; then
+    . "$HOME/.cargo/env" 2>/dev/null || true
+  fi
+  if command -v cargo >/dev/null 2>&1; then
+    command -v cargo
+    return 0
+  fi
+  if [ -x "$HOME/.cargo/bin/cargo" ]; then
+    echo "$HOME/.cargo/bin/cargo"
+    return 0
+  fi
+  if [ -n "${SUDO_USER:-}" ]; then
+    local user_home
+    user_home=$(eval echo "~$SUDO_USER")
+    if [ -x "$user_home/.cargo/bin/cargo" ]; then
+      echo "$user_home/.cargo/bin/cargo"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Always build as a regular user (never root) to preserve target/ permissions
+echo "==> Building wander (release)"
+CARGO_EXEC=$(find_cargo || echo "cargo")
+CARGO_DIR="$(dirname "$CARGO_EXEC")"
+
+if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+  sudo -u "$SUDO_USER" env PATH="$CARGO_DIR:$PATH" "$CARGO_EXEC" build --release
+else
+  export PATH="$CARGO_DIR:$PATH"
+  "$CARGO_EXEC" build --release
+fi
+
+# Escalate to sudo ONLY for the copy/install phase if destination is not writable
+if [ "$(id -u)" -ne 0 ] && ! [ -w "$BIN_DIR" 2>/dev/null ] && ! [ -w "$(dirname "$BIN_DIR")" 2>/dev/null ]; then
+  echo "==> Installing to ${BIN_DIR} requires elevated permissions."
+  echo "    Running installation phase with sudo..."
+  exec sudo PREFIX="$PREFIX" BIN_DIR="$BIN_DIR" APP_DIR="$APP_DIR" ICON_DIR="$ICON_DIR" "$0" "$@"
+fi
 
 echo "==> Installing binary to ${BIN_DIR}"
 mkdir -p "$BIN_DIR"
