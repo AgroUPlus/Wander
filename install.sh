@@ -14,9 +14,10 @@ if ! command -v cargo >/dev/null 2>&1; then
   fi
 fi
 
-BIN_DIR="${HOME}/.local/bin"
-APP_DIR="${HOME}/.local/share/applications"
-ICON_DIR="${HOME}/.local/share/icons/hicolor/scalable/apps"
+PREFIX="${PREFIX:-/usr}"
+BIN_DIR="${BIN_DIR:-${PREFIX}/bin}"
+APP_DIR="${APP_DIR:-${PREFIX}/share/applications}"
+ICON_DIR="${ICON_DIR:-${PREFIX}/share/icons/hicolor/scalable/apps}"
 
 echo "==> Building (release)"
 cargo build --release
@@ -37,9 +38,9 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 fi
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  gtk-update-icon-cache -f -t "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+  gtk-update-icon-cache -f -t "${PREFIX}/share/icons/hicolor" >/dev/null 2>&1 || true
 else
-  touch "${HOME}/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+  touch "${PREFIX}/share/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
 echo
@@ -52,8 +53,8 @@ case ":${PATH}:" in
   *)
     echo "  NOTE: ${BIN_DIR} is not on your PATH."
     echo "  Add this to your shell config:"
-    echo "      set -gx PATH \$HOME/.local/bin \$PATH   # fish"
-    echo "      export PATH=\"\$HOME/.local/bin:\$PATH\"  # bash/zsh"
+    echo "      set -gx PATH ${BIN_DIR} \$PATH   # fish"
+    echo "      export PATH=\"${BIN_DIR}:\$PATH\"  # bash/zsh"
     ;;
 esac
 
