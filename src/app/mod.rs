@@ -171,6 +171,11 @@ pub struct App {
 
     /// The modal popup that currently owns the keyboard, if any.
     pub overlay: Option<crate::ui::overlay::Overlay>,
+    /// A sync offer that arrived while something else owned the screen.
+    ///
+    /// Offers used to be dropped in that case, so anything that landed while a dialog was open was
+    /// lost until the next restart. Held here instead and raised as soon as the way is clear.
+    pub(crate) pending_sync_offer: Option<Vec<crate::integrations::sync::MissingTrack>>,
     /// Full-screen now-playing view: cover, lyrics and visualiser only.
     pub focus_mode: bool,
     /// Snapshots taken before destructive queue edits, newest last.
@@ -317,6 +322,7 @@ impl App {
             lyrics_song: None,
             queue_undo: Vec::new(),
             overlay: None,
+            pending_sync_offer: None,
             focus_mode: false,
             history: Vec::new(),
             history_bytes: 0,

@@ -161,12 +161,68 @@ impl App {
 
     /// Called when the server answers "what am I missing".
     pub(crate) fn on_sync_offer(&mut self, missing: Vec<crate::integrations::sync::MissingTrack>) {
-        // Nothing missing, or the user is in the middle of something else — an offer is not worth
-        // stealing a modal for.
-        if missing.is_empty() || self.overlay.is_some() {
+        if missing.is_empty() {
+            return;
+        }
+        // An offer is not worth stealing a modal for — but it is worth keeping. It used to be
+        // discarded here, so anything arriving during a dialog was lost until the next restart.
+        if self.overlay.is_some() {
+            self.pending_sync_offer = Some(missing);
             return;
         }
         self.overlay = Some(Overlay::Sync(SyncState::new(missing)));
+    }
+
+    /// Raises an offer that had to wait for the screen. Called once per frame.
+    pub(crate) fn surface_pending_offer(&mut self) {
+        if self.overlay.is_some() {
+            return;
+        }
+        if let Some(missing) = self.pending_sync_offer.take() {
+            self.overlay = Some(Overlay::Sync(SyncState::new(missing)));
+        }
+    }
+
+    /// Listens for Agro's live messages for as long as the app runs.
+    ///
+    /// The socket only ever says "something changed"; the answer is always to ask the server what
+    /// this device is now missing. That keeps the decision on the server, and makes a duplicated
+    /// or dropped message cost a redundant query rather than a wrong screen.
+    ///
+    /// Spawned rather than driven by the frame tick: the tick is `pending()` unless something is
+    /// animating, so a paused, idle player would never wake up to notice.
+    pub fn start_live_sync(&mut self) {
+        let agro = &self.config.agro;
+        if !agro.enabled || agro.passphrase.trim().is_empty() || agro.server.trim().is_empty() {
+            return;
+        }
+        // Nothing can be offered if this machine never says what it holds.
+        if !self.config.sync.report_holdings && !self.config.sync.enabled {
+            return;
+        }
+        let Some(client) = self.sync_client() else {
+            return;
+        };
+
+        let mut messages =
+            crate::integrations::agro_ws::spawn(&agro.server, &agro.passphrase, &agro.device_id);
+        let loads = self.loads.clone();
+
+        tokio::spawn(async move {
+            use crate::integrations::agro_ws::LiveMessage;
+            while let Some(message) = messages.recv().await {
+                // Both mean the same thing to this client: ask again. They are separate in the
+                // protocol because they will not always be.
+                match message {
+                    LiveMessage::SyncOffer { .. } | LiveMessage::LibraryUpdated => {
+                        let missing = client.missing_here(OFFER_LIMIT).await.unwrap_or_default();
+                        if !missing.is_empty() {
+                            let _ = loads.send(LoadEvent::SyncOffer(missing));
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

@@ -139,6 +139,8 @@ async fn main() -> Result<()> {
     if app.config.agro.enabled && (app.config.sync.report_holdings || app.config.sync.enabled) {
         app.sync_library();
         app.check_sync_offers();
+        // And keep listening, so music that arrives later shows up without a restart.
+        app.start_live_sync();
     }
 
     // Publish to MPRIS so the desktop bar, lock screen, playerctl and media
@@ -359,6 +361,8 @@ async fn run(
         // Deferred disk writes land here, at most once a second, so nothing in
         // the input path ever blocks on the filesystem.
         app.flush_state(false);
+        // An offer that arrived while a dialog was up gets its turn now.
+        app.surface_pending_offer();
 
         // Drain the audio tap once per frame, whether or not the visualiser is
         // on screen: the DSP does not belong on the render path, and a mode that
