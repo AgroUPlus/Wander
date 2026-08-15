@@ -56,8 +56,9 @@ impl App {
         });
 
         let loads = self.loads.clone();
+        let progress_sink = loads.clone();
         tokio::spawn(async move {
-            let outcome = run_pass(client, local, config).await;
+            let outcome = run_pass(client, local, config, progress_sink).await;
             let _ = loads.send(LoadEvent::SyncFinished(outcome.map_err(|e| format!("{e:#}"))));
         });
     }
@@ -170,7 +171,13 @@ impl App {
             return;
         };
         state.pending = true;
-        let missing = state.missing.clone();
+        // Only what was ticked. Everything starts ticked, so the default is still "all of it".
+        let missing = state.selected();
+        if missing.is_empty() {
+            state.pending = false;
+            state.result = Some(Ok(0));
+            return;
+        }
 
         let loads = self.loads.clone();
         tokio::spawn(async move {
@@ -311,8 +318,15 @@ async fn run_pass(
     client: SyncClient,
     local: std::sync::Arc<crate::library::local::LocalLibrary>,
     config: crate::config::SyncConfig,
+    loads: tokio::sync::mpsc::UnboundedSender<LoadEvent>,
 ) -> anyhow::Result<SyncSummary> {
     let mut summary = SyncSummary::default();
+    // Hashing reads every byte and uploading sends them; a pass over a large library is minutes
+    // long. Without this the operations pane showed a running row with no progress at all, which
+    // is indistinguishable from a hang.
+    let progress = |fraction: f32, detail: String| {
+        let _ = loads.send(LoadEvent::SyncProgress { fraction, detail });
+    };
 
     // ── Hash ────────────────────────────────────────────────────────────────────────────────
     // On the blocking pool: this reads whole files and would stall the runtime otherwise.
@@ -332,6 +346,7 @@ async fn run_pass(
         .saturating_sub(unhashed.len());
 
     if !unhashed.is_empty() {
+        progress(0.0, format!("Hashing {} files…", unhashed.len()));
         let hashed = tokio::task::spawn_blocking(move || {
             unhashed
                 .into_iter()
@@ -364,12 +379,21 @@ async fn run_pass(
         .collect();
 
     if config.report_holdings && !hashed.is_empty() {
+        progress(0.3, format!("Reporting {} tracks…", hashed.len()));
         client.report_holdings(&hashed).await?;
     }
 
     // ── Upload ──────────────────────────────────────────────────────────────────────────────
     if config.enabled {
-        for track in hashed.into_iter().take(config.upload_batch) {
+        let batch: Vec<_> = hashed.into_iter().take(config.upload_batch).collect();
+        let total = batch.len().max(1) as f32;
+        for (done, track) in batch.into_iter().enumerate() {
+            // Named rather than counted: "Sending Limerence" says what is taking the time in a way
+            // that "12 of 25" does not.
+            progress(
+                0.3 + 0.7 * (done as f32 / total),
+                format!("Sending {}", track.title),
+            );
             match client.upload(track).await {
                 Ok(UploadOutcome::Uploaded) => summary.uploaded += 1,
                 Ok(UploadOutcome::AlreadyPresent) => summary.already_present += 1,

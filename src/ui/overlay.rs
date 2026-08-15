@@ -292,6 +292,10 @@ pub struct ShareState {
 #[derive(Debug)]
 pub struct SyncState {
     pub missing: Vec<crate::integrations::sync::MissingTrack>,
+    /// Whether each track is wanted. Parallel to `missing`.
+    pub chosen: Vec<bool>,
+    /// Highlighted row.
+    pub cursor: usize,
     /// A fetch is in flight.
     pub pending: bool,
     /// Set once the fetch finishes: how many arrived, or why none did.
@@ -301,25 +305,68 @@ pub struct SyncState {
 impl SyncState {
     pub fn new(missing: Vec<crate::integrations::sync::MissingTrack>) -> Self {
         Self {
+            // Everything is wanted by default: the common answer is "yes, all of it", and making
+            // someone tick two hundred boxes to get there is a worse dialog than the one this
+            // replaces.
+            chosen: vec![true; missing.len()],
             missing,
+            cursor: 0,
             pending: false,
             result: None,
         }
     }
 
-    /// A few names rather than only a count. "412 tracks" is a chore; naming three of them is a
-    /// decision the user can actually make.
-    pub fn sample(&self) -> Vec<String> {
+    /// Rows the list shows at once. The popup is a fixed height, so this is what fits.
+    pub const VISIBLE: usize = 8;
+
+    pub fn move_cursor(&mut self, delta: isize) {
+        if self.missing.is_empty() {
+            return;
+        }
+        let last = self.missing.len() - 1;
+        self.cursor = self.cursor.saturating_add_signed(delta).min(last);
+    }
+
+    /// Includes or excludes the highlighted track.
+    pub fn toggle(&mut self) {
+        if let Some(chosen) = self.chosen.get_mut(self.cursor) {
+            *chosen = !*chosen;
+        }
+    }
+
+    /// All or nothing, for when the per-track choice is not worth making.
+    pub fn toggle_all(&mut self) {
+        let wanted = !self.chosen.iter().all(|c| *c);
+        self.chosen.iter_mut().for_each(|c| *c = wanted);
+    }
+
+    /// First row to draw, so the cursor stays on screen.
+    pub fn scroll_offset(&self) -> usize {
+        self.cursor.saturating_sub(Self::VISIBLE - 1)
+    }
+
+    /// The tracks actually asked for.
+    pub fn selected(&self) -> Vec<crate::integrations::sync::MissingTrack> {
         self.missing
             .iter()
-            .take(3)
-            .map(|t| format!("{} — {}", t.artist, t.title))
+            .zip(&self.chosen)
+            .filter(|(_, chosen)| **chosen)
+            .map(|(track, _)| track.clone())
             .collect()
     }
 
-    /// Total size of the transfer, so the user can weigh it before agreeing to it.
+    pub fn selected_count(&self) -> usize {
+        self.chosen.iter().filter(|c| **c).count()
+    }
+
+    /// Size of what is selected, so the user can weigh it before agreeing to it.
     pub fn total_bytes(&self) -> i64 {
-        self.missing.iter().map(|t| t.size_bytes).sum()
+        self.missing
+            .iter()
+            .zip(&self.chosen)
+            .filter(|(_, chosen)| **chosen)
+            .map(|(track, _)| track.size_bytes)
+            .sum()
     }
 }
 
@@ -441,20 +488,58 @@ fn draw_sync(frame: &mut Frame, area: Rect, state: &SyncState, theme: &Theme) {
                 theme.title(),
             ));
             lines.push(Line::raw(""));
-            for entry in state.sample() {
-                lines.push(Line::raw(format!("  {entry}")));
+
+            // The whole list, scrolled — not three names and a count. Deciding whether to pull
+            // 400 tracks is a different question from deciding which of them you want, and only
+            // the second one can be answered by seeing them.
+            let offset = state.scroll_offset();
+            for (index, track) in state
+                .missing
+                .iter()
+                .enumerate()
+                .skip(offset)
+                .take(SyncState::VISIBLE)
+            {
+                let mark = if state.chosen.get(index).copied().unwrap_or(false) {
+                    "[x]"
+                } else {
+                    "[ ]"
+                };
+                let label = format!("{mark} {} — {}", track.artist, track.title);
+                let style = if index == state.cursor {
+                    theme.selected()
+                } else if state.chosen.get(index).copied().unwrap_or(false) {
+                    theme.base()
+                } else {
+                    theme.dim()
+                };
+                lines.push(Line::styled(
+                    crate::ui::widgets::truncate(&label, 58),
+                    style,
+                ));
             }
-            if count > 3 {
-                lines.push(Line::styled(format!("  …and {} more", count - 3), theme.dim()));
+            if offset + SyncState::VISIBLE < count {
+                lines.push(Line::styled(
+                    format!("  …{} more below", count - offset - SyncState::VISIBLE),
+                    theme.dim(),
+                ));
             }
+
             lines.push(Line::raw(""));
             lines.push(Line::styled(
-                format!("About {}", human_bytes(state.total_bytes())),
+                format!(
+                    "{} selected · about {}",
+                    state.selected_count(),
+                    human_bytes(state.total_bytes())
+                ),
                 theme.dim(),
             ));
-            lines.push(Line::raw(""));
             lines.push(Line::styled(
-                if state.pending { "Fetching…" } else { "Enter to fetch · Esc to dismiss" },
+                if state.pending {
+                    "Fetching…".to_string()
+                } else {
+                    "j/k move · space toggle · a all · Enter fetch · Esc dismiss".to_string()
+                },
                 theme.dim(),
             ));
         }
@@ -821,5 +906,67 @@ mod tests {
         let mut state = ShareState::new(Vec::new());
         state.expiry = EXPIRIES.len() - 1;
         assert_eq!(state.expires_ms(), None);
+    }
+
+    fn missing(title: &str, size: i64) -> crate::integrations::sync::MissingTrack {
+        crate::integrations::sync::MissingTrack {
+            content_hash: title.to_string(),
+            title: title.to_string(),
+            artist: "Marzuku".to_string(),
+            album: None,
+            duration_ms: 0,
+            size_bytes: size,
+        }
+    }
+
+    #[test]
+    fn everything_is_wanted_until_it_is_not() {
+        let mut state = SyncState::new(vec![missing("a", 10), missing("b", 20)]);
+        assert_eq!(state.selected_count(), 2, "the default answer is all of it");
+        assert_eq!(state.total_bytes(), 30);
+
+        state.toggle();
+        assert_eq!(state.selected_count(), 1);
+        assert_eq!(state.total_bytes(), 20, "size follows the selection");
+        assert_eq!(state.selected()[0].title, "b");
+    }
+
+    #[test]
+    fn toggle_all_clears_then_restores() {
+        let mut state = SyncState::new(vec![missing("a", 1), missing("b", 1)]);
+        state.toggle_all();
+        assert_eq!(state.selected_count(), 0, "all selected means the next press clears");
+        state.toggle_all();
+        assert_eq!(state.selected_count(), 2);
+    }
+
+    #[test]
+    fn the_cursor_stays_inside_the_list() {
+        let mut state = SyncState::new(vec![missing("a", 1), missing("b", 1)]);
+        state.move_cursor(-1);
+        assert_eq!(state.cursor, 0, "cannot go above the first row");
+        state.move_cursor(50);
+        assert_eq!(state.cursor, 1, "cannot go past the last");
+    }
+
+    #[test]
+    fn the_view_follows_the_cursor_down_a_long_list() {
+        let tracks: Vec<_> = (0..30).map(|i| missing(&i.to_string(), 1)).collect();
+        let mut state = SyncState::new(tracks);
+        assert_eq!(state.scroll_offset(), 0);
+        state.move_cursor(20);
+        assert_eq!(
+            state.scroll_offset(),
+            20 - (SyncState::VISIBLE - 1),
+            "the highlighted row stays on screen"
+        );
+    }
+
+    #[test]
+    fn an_empty_offer_does_not_panic() {
+        let mut state = SyncState::new(Vec::new());
+        state.move_cursor(1);
+        state.toggle();
+        assert_eq!(state.selected_count(), 0);
     }
 }

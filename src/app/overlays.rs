@@ -112,7 +112,13 @@ impl App {
                         self.overlay = None;
                     }
                 }
-                KeyCode::Enter if !state.pending => self.accept_sync_offer(),
+                _ if state.pending => {}
+                // Same movement keys as every other list in the app.
+                KeyCode::Down | KeyCode::Char('j') => state.move_cursor(1),
+                KeyCode::Up | KeyCode::Char('k') => state.move_cursor(-1),
+                KeyCode::Char(' ') => state.toggle(),
+                KeyCode::Char('a') => state.toggle_all(),
+                KeyCode::Enter => self.accept_sync_offer(),
                 _ => {}
             },
             Overlay::Playlist(state) => match key.code {

@@ -186,6 +186,9 @@ impl App {
             LoadEvent::SyncOffer(missing) => self.on_sync_offer(missing),
             LoadEvent::SyncFetched(result) => self.on_sync_fetched(result),
             LoadEvent::Reclaimable(tracks) => self.reclaimable = tracks,
+            LoadEvent::SyncProgress { fraction, detail } => {
+                self.update_operation_progress("library-sync", fraction, Some(detail))
+            }
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {
                     state.pending = false;
@@ -287,6 +290,7 @@ impl App {
                         self.push_notification(NotificationLevel::Success, msg);
                         self.finish_operation("jamendo-dl", OperationStatus::Completed);
                         self.rescan_local_library();
+                        self.sync_library();
                     }
                     Err(err) => {
                         let msg = format!("Jamendo download failed for '{title}': {err}");
@@ -334,6 +338,9 @@ impl App {
                         self.push_notification(NotificationLevel::Success, msg);
                         self.finish_operation("archive-dl", OperationStatus::Completed);
                         self.rescan_local_library();
+                        // A download is exactly the moment a new file appears, so send it on
+                        // rather than leaving it for the next launch to notice.
+                        self.sync_library();
                     }
                     Err(err) => {
                         let msg = format!("Archive download failed for '{title}': {err}");
@@ -412,6 +419,7 @@ impl App {
                         self.push_notification(NotificationLevel::Success, msg);
                         self.finish_operation("nyaa-dl", OperationStatus::Completed);
                         self.rescan_local_library();
+                        self.sync_library();
                     }
                     Err(err) => {
                         let msg = format!("Download failed for '{title}': {err}");

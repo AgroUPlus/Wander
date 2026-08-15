@@ -204,6 +204,8 @@ pub enum LoadEvent {
     SyncFetched(Result<usize, String>),
     /// Local files the server already holds, so deleting them here loses nothing.
     Reclaimable(Vec<crate::integrations::sync::MissingTrack>),
+    /// How far through a sync pass we are, so a long upload is not a frozen-looking bar.
+    SyncProgress { fraction: f32, detail: String },
     /// Seed tracks for a Home mix.
     Mix {
         name: String,
