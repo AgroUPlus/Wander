@@ -136,6 +136,10 @@ async fn main() -> Result<()> {
     // and press a key, which is not what "background sync" should mean. It is cheap by default:
     // `sync.report_holdings` sends metadata only, and `sync.enabled` — which actually moves audio
     // — stays off unless it has been asked for. Set both to false to opt out entirely.
+    // One cheap query for the fleet's share domain, if a server publishes one. Off the critical
+    // path: it resolves in the background and only affects the next link that gets shared.
+    app.refresh_share_domain();
+
     if app.config.agro.enabled && (app.config.sync.report_holdings || app.config.sync.enabled) {
         app.sync_library();
         app.check_sync_offers();
