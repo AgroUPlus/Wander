@@ -97,6 +97,38 @@ impl App {
                 let _ = self.config.save();
             }
 
+            SettingItem::SyncEnabled => {
+                if !self.config.agro.enabled {
+                    self.push_notification(NotificationLevel::Warning, "Pair with Agro first");
+                    return;
+                }
+                self.config.sync.enabled = !self.config.sync.enabled;
+                let _ = self.config.save();
+                let message = if self.config.sync.enabled {
+                    // Say where the files go: "upload my music" is a big enough thing to do that
+                    // it should not be a silent toggle.
+                    "Uploading local music to Agro on each sync pass"
+                } else {
+                    "Uploads off — no audio leaves this machine"
+                };
+                self.push_notification(NotificationLevel::Info, message);
+            }
+
+            SettingItem::SyncReportHoldings => {
+                if !self.config.agro.enabled {
+                    self.push_notification(NotificationLevel::Warning, "Pair with Agro first");
+                    return;
+                }
+                self.config.sync.report_holdings = !self.config.sync.report_holdings;
+                let _ = self.config.save();
+                let message = if self.config.sync.report_holdings {
+                    "Reporting what this machine holds — metadata only"
+                } else {
+                    "Not reporting holdings — Agro cannot offer you what you are missing"
+                };
+                self.push_notification(NotificationLevel::Info, message);
+            }
+
             SettingItem::ThemePreset => self.cycle_theme_preset(delta),
             SettingItem::Glyphs => {
                 use crate::ui::glyphs::GlyphSet;

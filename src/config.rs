@@ -416,13 +416,28 @@ impl Config {
     }
 
     /// Save the config to disk.
+    ///
+    /// Written to a sibling temp file and renamed over the original, because every settings toggle
+    /// calls this: writing in place means a crash, a full disk or a kill at the wrong moment
+    /// leaves a half-written config, and the next launch starts with defaults or an error. The
+    /// rename is atomic within a directory, so the file on disk is always one whole config or the
+    /// other.
+    ///
+    /// Note this rewrites the file from the struct, so comments and key order in a hand-edited
+    /// `config.toml` do not survive a save. That is inherent to round-tripping through `toml`.
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let text = toml::to_string_pretty(self).context("serializing config")?;
-        std::fs::write(&path, text).with_context(|| format!("writing config at {}", path.display()))
+
+        let temp = path.with_extension("toml.new");
+        std::fs::write(&temp, text)
+            .with_context(|| format!("writing config at {}", temp.display()))?;
+        std::fs::rename(&temp, &path).with_context(|| {
+            format!("replacing config at {}", path.display())
+        })
     }
 
     /// Resolve the password, preferring the OS keyring over the config file.

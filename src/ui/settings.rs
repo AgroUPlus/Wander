@@ -68,6 +68,10 @@ pub enum SettingItem {
     Rescan,
     /// Send this machine's local files to Agro, and ask what it is missing.
     SyncLibrary,
+    /// Whether a sync pass uploads audio, or only says what this machine holds.
+    SyncEnabled,
+    /// Report holdings even with uploads off — the cheap half, metadata only.
+    SyncReportHoldings,
 
     // Appearance
     ThemePreset,
@@ -131,7 +135,9 @@ impl SettingItem {
             | Self::LocalPlaylistDir
             | Self::ScanOnStart
             | Self::Rescan
-            | Self::SyncLibrary => Section::Local,
+            | Self::SyncLibrary
+            | Self::SyncEnabled
+            | Self::SyncReportHoldings => Section::Local,
 
             Self::ThemePreset
             | Self::Glyphs
@@ -221,6 +227,8 @@ impl SettingItem {
             Self::ScanOnStart => "Scan on startup".into(),
             Self::Rescan => "Rescan library".into(),
             Self::SyncLibrary => "Sync library with Agro".into(),
+            Self::SyncEnabled => "Upload my music".into(),
+            Self::SyncReportHoldings => "Report what I hold".into(),
 
             Self::ThemePreset => "Theme preset".into(),
             Self::Glyphs => "Icon set".into(),
@@ -285,6 +293,8 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::LocalPlaylistDir,
         SettingItem::ScanOnStart,
         SettingItem::Rescan,
+        SettingItem::SyncEnabled,
+        SettingItem::SyncReportHoldings,
         SettingItem::SyncLibrary,
         SettingItem::ThemePreset,
         SettingItem::Glyphs,
@@ -379,6 +389,20 @@ fn value_of(app: &App, item: SettingItem) -> String {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(not set — local playlists disabled)".into()),
         SettingItem::ScanOnStart => on_off(config.local.scan_on_start),
+        SettingItem::SyncEnabled => {
+            if !config.agro.enabled {
+                "pair with Agro first".into()
+            } else {
+                on_off(config.sync.enabled)
+            }
+        }
+        SettingItem::SyncReportHoldings => {
+            if !config.agro.enabled {
+                "pair with Agro first".into()
+            } else {
+                on_off(config.sync.report_holdings)
+            }
+        }
         SettingItem::SyncLibrary => {
             if !config.agro.enabled {
                 "pair with Agro first".into()
@@ -387,7 +411,7 @@ fn value_of(app: &App, item: SettingItem) -> String {
             } else if config.sync.report_holdings {
                 "reporting what you hold, not uploading  [Enter to sync now]".into()
             } else {
-                "off — set sync.enabled in config.toml".into()
+                "nothing to do — both switches above are off".into()
             }
         }
         SettingItem::Rescan => app.scan_status.clone().unwrap_or_else(|| {
