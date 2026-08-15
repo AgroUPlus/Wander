@@ -196,6 +196,8 @@ pub enum LoadEvent {
     },
     /// A share link, or the reason the server refused to make one.
     ShareCreated(Result<String, String>),
+    /// The share domain a paired Agro server publishes, or `None` if it publishes none.
+    ShareDomain(Option<crate::integrations::share_link::ShareDomain>),
     /// One sync pass finished: how many files were hashed and uploaded, or why it stopped.
     SyncFinished(Result<SyncSummary, String>),
     /// The server's answer to "what am I missing", ready to offer.

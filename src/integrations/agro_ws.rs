@@ -162,9 +162,9 @@ mod tests {
             socket_url("https://agro.example.com/", "tok en", "wander-desktop").unwrap(),
             "wss://agro.example.com/ws/sync?token=tok%20en&device=wander-desktop"
         );
-        assert!(socket_url("http://192.168.1.16:1674", "t", "d")
+        assert!(socket_url("http://127.0.0.1:1674", "t", "d")
             .unwrap()
-            .starts_with("ws://192.168.1.16:1674/ws/sync"));
+            .starts_with("ws://127.0.0.1:1674/ws/sync"));
     }
 
     #[test]

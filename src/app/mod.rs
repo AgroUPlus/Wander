@@ -70,6 +70,10 @@ pub struct App {
     tab_history: Vec<Tab>,
     pub should_quit: bool,
     pub status_message: Option<String>,
+    /// The share domain a paired Agro server published, if any. Takes precedence over
+    /// `config.share` so the fleet is configured in one place; `None` leaves the local config in
+    /// charge, which is what happens with no Agro at all.
+    pub agro_share_domain: Option<crate::integrations::share_link::ShareDomain>,
 
     pub show_help: bool,
     pub show_queue_pane: bool,
@@ -271,6 +275,7 @@ impl App {
             tab_history: Vec::new(),
             should_quit: false,
             status_message: None,
+            agro_share_domain: None,
             show_help: false,
             show_queue_pane: true,
             show_focus_queue: true,

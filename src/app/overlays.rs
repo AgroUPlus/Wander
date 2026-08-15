@@ -186,11 +186,16 @@ impl App {
         let expires = state.expires_ms();
         let downloadable = state.downloadable;
         let library = Arc::clone(&self.library);
+        // Resolved here rather than in the task: the domain is a setting, and reading it on the
+        // UI thread keeps the async block free of `self`.
+        let share_domain = self.share_domain();
         self.spawn_load(async move {
             let result = library
                 .create_share(&ids, &description, expires, downloadable)
                 .await
-                .map(|share| share.url)
+                // The server's own link when no domain is configured — see `ShareDomain::rewrite`,
+                // which hands anything it cannot carry straight back.
+                .map(|share| share_domain.rewrite(&share.url))
                 .map_err(|err| format!("{err:#}"));
             Ok(LoadEvent::ShareCreated(result))
         });

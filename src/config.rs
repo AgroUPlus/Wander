@@ -27,6 +27,7 @@ pub struct Config {
     pub plugins: PluginsConfig,
     pub agro: AgroConfig,
     pub sync: SyncConfig,
+    pub share: ShareConfig,
     /// Key overrides, e.g. `"ctrl+p" = "open_palette"`. `"none"` unbinds a key.
     /// Anything not listed keeps its default binding.
     #[serde(default)]
@@ -45,6 +46,24 @@ pub struct AgroConfig {
     pub device_id: String,
     pub device_name: Option<String>,
     pub sync_settings: bool,
+}
+
+/// Where share links go out.
+///
+/// A domain of your own, serving the `/listen` forwarder, so a link works for whoever receives it
+/// rather than only for someone using the same backend. Blank means share the server's own link,
+/// which is what happens with none of this configured.
+///
+/// A paired Agro server may publish this for the whole fleet — see `Agro::share_settings` — and
+/// when it does, its value wins over what is here. Agro is optional in both directions: without
+/// it, this field still works on its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShareConfig {
+    /// Bare host, e.g. `frwd.top`.
+    pub domain: String,
+    /// Extra hosts the forwarder will accept, beyond YouTube's and your music server's.
+    pub hosts: Vec<String>,
 }
 
 /// Sending this machine's local music to Agro.
@@ -250,6 +269,7 @@ impl Default for Config {
             plugins: PluginsConfig::default(),
             agro: AgroConfig::default(),
             sync: SyncConfig::default(),
+            share: ShareConfig::default(),
             keys: std::collections::HashMap::new(),
         }
     }

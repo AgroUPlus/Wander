@@ -189,6 +189,7 @@ impl App {
             LoadEvent::SyncProgress { fraction, detail } => {
                 self.update_operation_progress("library-sync", fraction, Some(detail))
             }
+            LoadEvent::ShareDomain(domain) => self.agro_share_domain = domain,
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {
                     state.pending = false;

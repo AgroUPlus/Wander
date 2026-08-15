@@ -12,6 +12,7 @@ use crate::app::types::{
     LoadEvent, NotificationLevel, Operation, OperationKind, OperationStatus, SyncSummary,
 };
 use crate::app::App;
+use crate::integrations::share_link::ShareDomain;
 use crate::integrations::sync::{hash_file, SyncClient, UploadOutcome};
 use crate::ui::overlay::{Overlay, SyncState};
 
@@ -26,6 +27,45 @@ impl App {
             return None;
         }
         SyncClient::new(&agro.server, &agro.username, &agro.passphrase, &agro.device_id).ok()
+    }
+
+    /// Where share links go: Agro's domain if a paired server publishes one, otherwise whatever
+    /// `[share]` in the config file says.
+    ///
+    /// Agro wins because it is the setting the *fleet* shares — set it once and Wander and Wanda
+    /// agree without either being touched. It is never required: with no server, or a server with
+    /// the feature off, the local config is what is left, and with neither the link is the one the
+    /// backend minted.
+    pub(crate) fn share_domain(&self) -> ShareDomain {
+        if let Some(from_agro) = self.agro_share_domain.clone() {
+            return from_agro;
+        }
+        ShareDomain {
+            domain: self.config.share.domain.clone(),
+            hosts: self.config.share.hosts.clone(),
+        }
+    }
+
+    /// Asks a paired server for the fleet's share domain. Quiet on every failure: this is a
+    /// convenience Agro may offer, never something sharing depends on.
+    pub fn refresh_share_domain(&mut self) {
+        let agro = self.config.agro.clone();
+        if !agro.enabled || agro.passphrase.trim().is_empty() || agro.server.trim().is_empty() {
+            self.agro_share_domain = None;
+            return;
+        }
+        let loads = self.loads.clone();
+        tokio::spawn(async move {
+            let client = crate::integrations::agro::AgroClient::new(
+                agro.server.clone(),
+                agro.username.clone(),
+                agro.passphrase.clone(),
+                agro.device_id.clone(),
+            );
+            if let Ok(domain) = client.fetch_share_domain().await {
+                let _ = loads.send(LoadEvent::ShareDomain(domain));
+            }
+        });
     }
 
     /// Hashes, reports and (if enabled) uploads one batch.

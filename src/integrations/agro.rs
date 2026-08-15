@@ -17,6 +17,7 @@ use tokio::sync::RwLock;
 use tokio::time::sleep;
 
 use crate::config::AgroConfig;
+use crate::integrations::share_link::ShareDomain;
 use crate::player::PlayerHandle;
 
 const ADJECTIVES: &[&str] = &[
@@ -278,6 +279,77 @@ impl AgroClient {
         }
 
         Ok(None)
+    }
+
+    /// The share-link domain this server publishes, if it has one switched on.
+    ///
+    /// Configured once on Agro and read by every player, so the fleet agrees without the domain
+    /// being typed into each one. `None` for a server that has the feature off, does not know the
+    /// fields, or cannot be reached — all of which leave the local `[share]` config in charge.
+    pub async fn fetch_share_domain(&self) -> Result<Option<ShareDomain>> {
+        let query = r#"
+            query ShareSettings($userId: String!) {
+                syncedSettings(userId: $userId) {
+                    shareDomain
+                    shareHosts
+                    shareEnabled
+                }
+            }
+        "#;
+
+        let body = json!({
+            "query": query,
+            "variables": { "userId": self.username }
+        });
+
+        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
+        let res = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Ok(None);
+        }
+
+        let json_data: serde_json::Value = res.json().await?;
+        let settings = json_data
+            .get("data")
+            .and_then(|d| d.get("syncedSettings"))
+            .filter(|s| !s.is_null());
+        let Some(settings) = settings else {
+            return Ok(None);
+        };
+
+        if !settings
+            .get("shareEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Ok(None);
+        }
+        let domain = settings
+            .get("shareDomain")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if domain.is_empty() {
+            return Ok(None);
+        }
+        let hosts = settings
+            .get("shareHosts")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .split(',')
+            .map(|host| host.trim().to_string())
+            .filter(|host| !host.is_empty())
+            .collect();
+
+        Ok(Some(ShareDomain { domain, hosts }))
     }
 }
 
