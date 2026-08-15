@@ -334,6 +334,7 @@ impl App {
             | SettingItem::Rescan
             // Enter-activated actions, not values with a left/right range.
             | SettingItem::SyncLibrary
+            | SettingItem::ReclaimSpace
             | SettingItem::ClearQueue
             | SettingItem::DiscordClientId
             | SettingItem::LrclibUrl
@@ -415,7 +416,10 @@ impl App {
                 // Ask what this machine is missing in the same breath: the answer is what the
                 // sync offer is built from, and the user has just said they care about sync.
                 self.check_sync_offers();
+                // And what it no longer needs to keep, which is the other half of the same answer.
+                self.check_reclaimable();
             }
+            SettingItem::ReclaimSpace => self.reclaim_space(),
             SettingItem::ClearQueue => {
                 self.snapshot_queue();
                 // One command rather than clearing the queue here and stopping

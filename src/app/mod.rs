@@ -176,6 +176,11 @@ pub struct App {
     /// Offers used to be dropped in that case, so anything that landed while a dialog was open was
     /// lost until the next restart. Held here instead and raised as soon as the way is clear.
     pub(crate) pending_sync_offer: Option<Vec<crate::integrations::sync::MissingTrack>>,
+    /// Local files the server says it already holds, so this machine need not.
+    ///
+    /// Empty unless the server says a local copy is redundant — with no Navidrome to stream from,
+    /// or no library root at all, deleting one would be deleting the only copy.
+    pub(crate) reclaimable: Vec<crate::integrations::sync::MissingTrack>,
     /// Full-screen now-playing view: cover, lyrics and visualiser only.
     pub focus_mode: bool,
     /// Snapshots taken before destructive queue edits, newest last.
@@ -323,6 +328,7 @@ impl App {
             queue_undo: Vec::new(),
             overlay: None,
             pending_sync_offer: None,
+            reclaimable: Vec::new(),
             focus_mode: false,
             history: Vec::new(),
             history_bytes: 0,

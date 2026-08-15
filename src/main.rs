@@ -139,6 +139,7 @@ async fn main() -> Result<()> {
     if app.config.agro.enabled && (app.config.sync.report_holdings || app.config.sync.enabled) {
         app.sync_library();
         app.check_sync_offers();
+        app.check_reclaimable();
         // And keep listening, so music that arrives later shows up without a restart.
         app.start_live_sync();
     }

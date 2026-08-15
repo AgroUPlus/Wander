@@ -463,7 +463,7 @@ fn draw_sync(frame: &mut Frame, area: Rect, state: &SyncState, theme: &Theme) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn human_bytes(bytes: i64) -> String {
+pub(crate) fn human_bytes(bytes: i64) -> String {
     const GB: i64 = 1024 * 1024 * 1024;
     const MB: i64 = 1024 * 1024;
     match bytes {

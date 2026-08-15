@@ -185,6 +185,7 @@ impl App {
             LoadEvent::SyncFinished(result) => self.on_sync_finished(result),
             LoadEvent::SyncOffer(missing) => self.on_sync_offer(missing),
             LoadEvent::SyncFetched(result) => self.on_sync_fetched(result),
+            LoadEvent::Reclaimable(tracks) => self.reclaimable = tracks,
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {
                     state.pending = false;

@@ -63,12 +63,92 @@ impl App {
     }
 
     /// Asks the server what this machine is missing, and offers it.
+    ///
+    /// Nothing is offered when the account streams from Navidrome: the track is already playable
+    /// on this machine, and downloading a copy of something you can already hear is not a feature.
+    /// The server decides which of those this is — see [`SyncMode`].
     pub fn check_sync_offers(&mut self) {
         let Some(client) = self.sync_client() else { return };
         self.spawn_load(async move {
+            let mode = client.sync_mode().await.unwrap_or_default();
+            if !mode.offers_downloads() {
+                return Ok(LoadEvent::SyncOffer(Vec::new()));
+            }
             let missing = client.missing_here(OFFER_LIMIT).await.unwrap_or_default();
             Ok(LoadEvent::SyncOffer(missing))
         });
+    }
+
+    /// Asks what this machine could stop keeping, because the server has it.
+    ///
+    /// Only asked when the server says a local copy is redundant rather than the only one. The
+    /// answer populates the Settings row; nothing is deleted without the user choosing to.
+    pub fn check_reclaimable(&mut self) {
+        let Some(client) = self.sync_client() else { return };
+        self.spawn_load(async move {
+            let mode = client.sync_mode().await.unwrap_or_default();
+            if !mode.offers_reclaim() {
+                return Ok(LoadEvent::Reclaimable(Vec::new()));
+            }
+            let tracks = client.reclaimable(OFFER_LIMIT).await.unwrap_or_default();
+            Ok(LoadEvent::Reclaimable(tracks))
+        });
+    }
+
+    /// Where this machine keeps the file with that content hash, if it still has it.
+    fn local_track_by_hash(&self, content_hash: &str) -> Option<std::path::PathBuf> {
+        let local = self.library_root.as_ref().and_then(|root| root.local())?;
+        local
+            .index()
+            .tracks
+            .iter()
+            .find(|track| track.content_hash.as_deref() == Some(content_hash))
+            .map(|track| track.path.clone())
+    }
+
+    /// Moves the redundant local copies to the trash.
+    ///
+    /// Trash, not delete: the server's copy has been checked to exist and to be the right size,
+    /// but "checked" is not "watched me hit rm", and a recoverable mistake is a different kind of
+    /// mistake. The local index has no incremental prune, so a rescan follows.
+    pub(crate) fn reclaim_space(&mut self) {
+        let tracks = std::mem::take(&mut self.reclaimable);
+        if tracks.is_empty() {
+            return;
+        }
+
+        // Local paths come from this machine's index, matched by content hash: the server sends
+        // what it holds, and only this side knows where the local copy of it lives.
+        let mut paths = Vec::new();
+        for track in &tracks {
+            if let Some(local) = self.local_track_by_hash(&track.content_hash) {
+                paths.push(local);
+            }
+        }
+        if paths.is_empty() {
+            self.push_notification(
+                NotificationLevel::Warning,
+                "Nothing matched on disk — try a rescan first",
+            );
+            return;
+        }
+
+        let count = paths.len();
+        match trash::delete_all(&paths) {
+            Ok(()) => {
+                self.push_notification(
+                    NotificationLevel::Success,
+                    &format!("Moved {count} files to the trash — still on the server"),
+                );
+                self.rescan_local_library();
+            }
+            Err(error) => {
+                self.push_notification(
+                    NotificationLevel::Error,
+                    &format!("Could not move them to the trash: {error}"),
+                );
+            }
+        }
     }
 
     /// The user accepted the offer: pull the files down into the local library.

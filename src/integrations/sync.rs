@@ -43,6 +43,37 @@ pub struct MissingTrack {
     pub size_bytes: i64,
 }
 
+/// How the server says music should move between this account's devices.
+///
+/// The server decides, from whether it archives and whether a Navidrome is on file. Both clients
+/// ask the same question and get the same answer, which is the point — this used to be inferred
+/// separately on each device from local config that knew nothing about the deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SyncMode {
+    /// Everything is streamable from Navidrome, so a local copy is a convenience rather than the
+    /// only way to hear it. Downloads are not offered; freeing space is.
+    Navidrome,
+    /// The server keeps the files but there is nothing to stream from, so a device that lacks a
+    /// recording is offered the file.
+    #[default]
+    PeerToPeer,
+    /// The server holds the index only. It is not a durable copy, so it never suggests deleting
+    /// one.
+    IndexOnly,
+}
+
+impl SyncMode {
+    /// Whether a device without a track should be offered the bytes.
+    pub fn offers_downloads(self) -> bool {
+        !matches!(self, SyncMode::Navidrome)
+    }
+
+    /// Whether a redundant local copy is safe to suggest removing.
+    pub fn offers_reclaim(self) -> bool {
+        matches!(self, SyncMode::Navidrome)
+    }
+}
+
 /// What happened to one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UploadOutcome {
@@ -151,6 +182,50 @@ impl SyncClient {
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         Ok(serde_json::from_value(missing).unwrap_or_default())
+    }
+
+    /// How this deployment expects music to move between devices.
+    ///
+    /// Asked rather than assumed. Whether the account has a Navidrome, and whether the server
+    /// keeps the bytes at all, are facts the server holds — deciding locally is how the desktop
+    /// and the phone ended up behaving differently on the same account.
+    pub async fn sync_mode(&self) -> Result<SyncMode> {
+        let query = "query Mode($userId: String!) { syncMode(userId: $userId) }";
+        let data = self
+            .graphql(query, json!({ "userId": self.username }))
+            .await?;
+        Ok(match data.get("syncMode").and_then(|m| m.as_str()) {
+            Some("NAVIDROME") => SyncMode::Navidrome,
+            Some("INDEX_ONLY") => SyncMode::IndexOnly,
+            // An unknown value from a newer server reads as "offer the files", the conservative
+            // choice: it never suggests deleting anything.
+            _ => SyncMode::PeerToPeer,
+        })
+    }
+
+    /// Files this machine holds that the server has already filed, and could therefore let go of.
+    ///
+    /// The server checks its own disk before answering, so this is more than "the index says we
+    /// uploaded it once".
+    pub async fn reclaimable(&self, limit: i64) -> Result<Vec<MissingTrack>> {
+        let query = "query Reclaimable($userId: String!, $deviceId: String!, $limit: Int) { \
+                     reclaimable(userId: $userId, deviceId: $deviceId, limit: $limit) { \
+                     contentHash title artist album durationMs sizeBytes } }";
+        let data = self
+            .graphql(
+                query,
+                json!({
+                    "userId": self.username,
+                    "deviceId": self.device_id,
+                    "limit": limit,
+                }),
+            )
+            .await?;
+        let tracks = data
+            .get("reclaimable")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::from_value(tracks).unwrap_or_default())
     }
 
     async fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {

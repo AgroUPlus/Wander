@@ -72,6 +72,8 @@ pub enum SettingItem {
     SyncEnabled,
     /// Report holdings even with uploads off — the cheap half, metadata only.
     SyncReportHoldings,
+    /// Trash local copies the server already holds.
+    ReclaimSpace,
 
     // Appearance
     ThemePreset,
@@ -137,7 +139,8 @@ impl SettingItem {
             | Self::Rescan
             | Self::SyncLibrary
             | Self::SyncEnabled
-            | Self::SyncReportHoldings => Section::Local,
+            | Self::SyncReportHoldings
+            | Self::ReclaimSpace => Section::Local,
 
             Self::ThemePreset
             | Self::Glyphs
@@ -229,6 +232,7 @@ impl SettingItem {
             Self::SyncLibrary => "Sync library with Agro".into(),
             Self::SyncEnabled => "Upload my music".into(),
             Self::SyncReportHoldings => "Report what I hold".into(),
+            Self::ReclaimSpace => "Free up space".into(),
 
             Self::ThemePreset => "Theme preset".into(),
             Self::Glyphs => "Icon set".into(),
@@ -296,6 +300,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::SyncEnabled,
         SettingItem::SyncReportHoldings,
         SettingItem::SyncLibrary,
+        SettingItem::ReclaimSpace,
         SettingItem::ThemePreset,
         SettingItem::Glyphs,
         SettingItem::CoverWidth,
@@ -412,6 +417,20 @@ fn value_of(app: &App, item: SettingItem) -> String {
                 "reporting what you hold, not uploading  [Enter to sync now]".into()
             } else {
                 "nothing to do — both switches above are off".into()
+            }
+        }
+        SettingItem::ReclaimSpace => {
+            if app.reclaimable.is_empty() {
+                // Two very different reasons for an empty list, and the difference matters: one is
+                // "there is nothing to gain", the other is "deleting would lose the only copy".
+                "nothing here the server already keeps".into()
+            } else {
+                let bytes: i64 = app.reclaimable.iter().map(|t| t.size_bytes).sum();
+                format!(
+                    "{} files, {} — trash them, keep them on the server  [Enter]",
+                    app.reclaimable.len(),
+                    crate::ui::overlay::human_bytes(bytes)
+                )
             }
         }
         SettingItem::Rescan => app.scan_status.clone().unwrap_or_else(|| {

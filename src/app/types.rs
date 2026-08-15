@@ -202,6 +202,8 @@ pub enum LoadEvent {
     SyncOffer(Vec<crate::integrations::sync::MissingTrack>),
     /// A peer fetch finished: how many files arrived, or why none did.
     SyncFetched(Result<usize, String>),
+    /// Local files the server already holds, so deleting them here loses nothing.
+    Reclaimable(Vec<crate::integrations::sync::MissingTrack>),
     /// Seed tracks for a Home mix.
     Mix {
         name: String,
