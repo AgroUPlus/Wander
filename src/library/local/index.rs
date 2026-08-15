@@ -32,6 +32,17 @@ pub struct LocalTrack {
     pub duration: u32,
     pub bit_rate: u32,
     pub suffix: Option<String>,
+
+    /// SHA-256 of the file's bytes, for Agro's library index.
+    ///
+    /// `None` until the sync task gets to it. Deliberately not filled in during the scan: hashing
+    /// a whole library means reading every byte of it, which would turn a fast incremental rescan
+    /// into minutes of disk IO for a feature that may be switched off.
+    ///
+    /// Once computed it survives rescans for free — an unchanged file's entry is cloned wholesale,
+    /// and the `(mtime, size)` stamp is exactly the condition under which the hash is still valid.
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 impl LocalTrack {
@@ -293,6 +304,7 @@ mod tests {
             duration: 200,
             bit_rate: 900,
             suffix: Some("flac".into()),
+            content_hash: None,
         }
     }
 

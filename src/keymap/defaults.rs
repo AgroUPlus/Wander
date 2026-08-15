@@ -88,6 +88,7 @@ impl Default for Keymap {
         bind(KeyCode::Char('v'), n, ToggleVisualiser);
         bind(KeyCode::Char('V'), s, CycleVisualiser);
         bind(KeyCode::Char('Y'), s, CycleLyricVariant);
+        bind(KeyCode::Char('H'), s, AgroTransferPlayback);
         bind(KeyCode::Char('T'), s, TranslateLyrics);
         bind(KeyCode::Char('l'), c, FetchOnlineLyrics);
         bind(KeyCode::Char('x'), n, ToggleRadio);

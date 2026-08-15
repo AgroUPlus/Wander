@@ -198,6 +198,18 @@ impl App {
                     }
                 ));
             }
+            SettingItem::AgroEnabled => {
+                self.config.agro.enabled = !self.config.agro.enabled;
+                let _ = self.config.save();
+                self.status_message = Some(format!(
+                    "Agro sync daemon: {} (restart to apply)",
+                    if self.config.agro.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ));
+            }
 
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaEnabled => {
@@ -268,37 +280,7 @@ impl App {
                 ));
             }
 
-            SettingItem::PluginJamendoEnabled => {
-                self.config.plugins.jamendo.enabled = !self.config.plugins.jamendo.enabled;
-                let _ = self.config.save();
-                if let Some(first) = OnlineSource::available(&self.config).first()
-                    && !OnlineSource::available(&self.config).contains(&self.online_source)
-                {
-                    self.online_source = *first;
-                }
-                self.status_message = Some(format!(
-                    "Online (Jamendo) plugin: {}",
-                    if self.config.plugins.jamendo.enabled {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                ));
-            }
-
-            SettingItem::PluginJamendoPrimaryAction => {
-                use crate::config::OnlinePrimaryAction;
-                self.config.plugins.jamendo.primary_action =
-                    match self.config.plugins.jamendo.primary_action {
-                        OnlinePrimaryAction::Stream => OnlinePrimaryAction::Download,
-                        OnlinePrimaryAction::Download => OnlinePrimaryAction::Stream,
-                    };
-                let _ = self.config.save();
-                self.status_message = Some(format!(
-                    "Jamendo default action: {}",
-                    self.config.plugins.jamendo.primary_action.label()
-                ));
-            }
+            SettingItem::AgroDeviceName => {}
 
             SettingItem::QueueColumn(index) => {
                 if let Some(column) = self.config.queue_columns.get_mut(index) {
@@ -318,12 +300,15 @@ impl App {
             | SettingItem::AddLocalPath
             | SettingItem::LocalPlaylistDir
             | SettingItem::Rescan
+            // Enter-activated actions, not values with a left/right range.
+            | SettingItem::SyncLibrary
             | SettingItem::ClearQueue
             | SettingItem::DiscordClientId
             | SettingItem::LrclibUrl
+            | SettingItem::AgroServer
+            | SettingItem::AgroUsername
+            | SettingItem::AgroPassphrase
             | SettingItem::PluginArchiveDownloadDir
-            | SettingItem::PluginJamendoClientId
-            | SettingItem::PluginJamendoDownloadDir
             | SettingItem::AddQueueColumn
             | SettingItem::ShowKeybindings => {}
             #[cfg(feature = "nyaa")]
@@ -362,6 +347,9 @@ impl App {
                     .unwrap_or_default(),
                 SettingItem::DiscordClientId => self.config.discord.client_id.clone(),
                 SettingItem::LrclibUrl => self.config.lyrics.lrclib_url.clone(),
+                SettingItem::AgroServer => self.config.agro.server.clone(),
+                SettingItem::AgroUsername => self.config.agro.username.clone(),
+                SettingItem::AgroPassphrase => self.config.agro.passphrase.clone(),
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => self
                 .config
@@ -379,17 +367,6 @@ impl App {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default(),
-                SettingItem::PluginJamendoClientId => {
-                    self.config.plugins.jamendo.client_id.clone()
-                }
-                SettingItem::PluginJamendoDownloadDir => self
-                    .config
-                    .plugins
-                    .jamendo
-                    .download_dir
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
                 _ => String::new(),
             };
             self.settings_edit =
@@ -401,6 +378,12 @@ impl App {
             SettingItem::TestConnection => self.test_connection(),
             SettingItem::ReRunSetup => self.overlay = Some(Overlay::Setup(Default::default())),
             SettingItem::Rescan => self.rescan_local_library(),
+            SettingItem::SyncLibrary => {
+                self.sync_library();
+                // Ask what this machine is missing in the same breath: the answer is what the
+                // sync offer is built from, and the user has just said they care about sync.
+                self.check_sync_offers();
+            }
             SettingItem::ClearQueue => {
                 self.snapshot_queue();
                 // One command rather than clearing the queue here and stopping
@@ -566,6 +549,21 @@ impl App {
                 let _ = self.config.save();
                 self.status_message = Some("LRCLIB server URL saved".into());
             }
+            SettingItem::AgroServer => {
+                self.config.agro.server = value.trim().to_string();
+                let _ = self.config.save();
+                self.status_message = Some("Agro daemon server URL saved".into());
+            }
+            SettingItem::AgroUsername => {
+                self.config.agro.username = value.trim().to_string();
+                let _ = self.config.save();
+                self.status_message = Some("Agro username saved".into());
+            }
+            SettingItem::AgroPassphrase => {
+                self.config.agro.passphrase = value.trim().to_string();
+                let _ = self.config.save();
+                self.status_message = Some("Agro passphrase saved".into());
+            }
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => {
                 self.config.plugins.nyaa.download_dir = (!value.is_empty()).then(|| expand_home(&value));
@@ -577,17 +575,6 @@ impl App {
                     (!value.is_empty()).then(|| expand_home(&value));
                 let _ = self.config.save();
                 self.status_message = Some("Archive download path updated".into());
-            }
-            SettingItem::PluginJamendoClientId => {
-                self.config.plugins.jamendo.client_id = value.trim().to_string();
-                let _ = self.config.save();
-                self.status_message = Some("Jamendo client ID saved".into());
-            }
-            SettingItem::PluginJamendoDownloadDir => {
-                self.config.plugins.jamendo.download_dir =
-                    (!value.is_empty()).then(|| expand_home(&value));
-                let _ = self.config.save();
-                self.status_message = Some("Jamendo download path updated".into());
             }
             _ => {}
         }

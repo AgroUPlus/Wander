@@ -28,7 +28,6 @@ pub enum Section {
     #[cfg(feature = "nyaa")]
     PluginNyaa,
     PluginArchive,
-    PluginJamendo,
     QueueColumns,
     Keys,
 }
@@ -44,7 +43,6 @@ impl Section {
             #[cfg(feature = "nyaa")]
             Self::PluginNyaa => "Plugin — Nyaa.si",
             Self::PluginArchive => "Plugin — Internet Archive",
-            Self::PluginJamendo => "Plugin — Jamendo",
             Self::QueueColumns => "Queue Columns",
             Self::Keys => "Keybindings",
         }
@@ -68,6 +66,8 @@ pub enum SettingItem {
     LocalPlaylistDir,
     ScanOnStart,
     Rescan,
+    /// Send this machine's local files to Agro, and ask what it is missing.
+    SyncLibrary,
 
     // Appearance
     ThemePreset,
@@ -90,6 +90,11 @@ pub enum SettingItem {
     DiscordCoverArt,
     FetchOnlineLyrics,
     LrclibUrl,
+    AgroEnabled,
+    AgroDeviceName,
+    AgroServer,
+    AgroUsername,
+    AgroPassphrase,
 
     // Plugins
     #[cfg(feature = "nyaa")]
@@ -101,10 +106,6 @@ pub enum SettingItem {
     PluginArchiveEnabled,
     PluginArchivePrimaryAction,
     PluginArchiveDownloadDir,
-    PluginJamendoEnabled,
-    PluginJamendoClientId,
-    PluginJamendoPrimaryAction,
-    PluginJamendoDownloadDir,
 
     // Queue columns
     QueueColumn(usize),
@@ -129,7 +130,8 @@ impl SettingItem {
             | Self::AddLocalPath
             | Self::LocalPlaylistDir
             | Self::ScanOnStart
-            | Self::Rescan => Section::Local,
+            | Self::Rescan
+            | Self::SyncLibrary => Section::Local,
 
             Self::ThemePreset
             | Self::Glyphs
@@ -147,7 +149,12 @@ impl SettingItem {
             | Self::DiscordClientId
             | Self::DiscordCoverArt
             | Self::FetchOnlineLyrics
-            | Self::LrclibUrl => Section::Integrations,
+            | Self::LrclibUrl
+            | Self::AgroEnabled
+            | Self::AgroDeviceName
+            | Self::AgroServer
+            | Self::AgroUsername
+            | Self::AgroPassphrase => Section::Integrations,
 
             #[cfg(feature = "nyaa")]
             Self::PluginNyaaEnabled | Self::PluginNyaaDownloadDir | Self::PluginNyaaPrimaryAction => {
@@ -156,10 +163,6 @@ impl SettingItem {
             Self::PluginArchiveEnabled
             | Self::PluginArchivePrimaryAction
             | Self::PluginArchiveDownloadDir => Section::PluginArchive,
-            Self::PluginJamendoEnabled
-            | Self::PluginJamendoClientId
-            | Self::PluginJamendoPrimaryAction
-            | Self::PluginJamendoDownloadDir => Section::PluginJamendo,
 
             Self::QueueColumn(_) | Self::AddQueueColumn => Section::QueueColumns,
             Self::ShowKeybindings => Section::Keys,
@@ -178,9 +181,10 @@ impl SettingItem {
                 | Self::LocalPlaylistDir
                 | Self::DiscordClientId
                 | Self::LrclibUrl
+                | Self::AgroServer
+                | Self::AgroUsername
+                | Self::AgroPassphrase
                 | Self::PluginArchiveDownloadDir
-                | Self::PluginJamendoClientId
-                | Self::PluginJamendoDownloadDir
         ) || {
             #[cfg(feature = "nyaa")]
             {
@@ -193,9 +197,9 @@ impl SettingItem {
         }
     }
 
-    /// Passwords are never echoed, and never written to `config.toml`.
+    /// Passwords and passphrases are masked on input.
     pub fn is_secret(self) -> bool {
-        matches!(self, Self::ServerPassword)
+        matches!(self, Self::ServerPassword | Self::AgroPassphrase)
     }
 
     /// Deliberately plain ASCII. Emoji are two columns wide but count as one
@@ -216,6 +220,7 @@ impl SettingItem {
             Self::LocalPlaylistDir => "Playlist folder".into(),
             Self::ScanOnStart => "Scan on startup".into(),
             Self::Rescan => "Rescan library".into(),
+            Self::SyncLibrary => "Sync library with Agro".into(),
 
             Self::ThemePreset => "Theme preset".into(),
             Self::Glyphs => "Icon set".into(),
@@ -235,6 +240,11 @@ impl SettingItem {
             Self::DiscordCoverArt => "Discord cover art".into(),
             Self::FetchOnlineLyrics => "Online lyrics (LRCLIB)".into(),
             Self::LrclibUrl => "LRCLIB URL".into(),
+            Self::AgroEnabled => "Agro sync daemon".into(),
+            Self::AgroDeviceName => "Device name".into(),
+            Self::AgroServer => "Agro server URL".into(),
+            Self::AgroUsername => "Agro username".into(),
+            Self::AgroPassphrase => "Agro passphrase".into(),
 
             #[cfg(feature = "nyaa")]
             Self::PluginNyaaEnabled => "Enable plugin".into(),
@@ -245,10 +255,6 @@ impl SettingItem {
             Self::PluginArchiveEnabled => "Enable plugin".into(),
             Self::PluginArchivePrimaryAction => "Default action".into(),
             Self::PluginArchiveDownloadDir => "Download path".into(),
-            Self::PluginJamendoEnabled => "Enable plugin".into(),
-            Self::PluginJamendoClientId => "Client ID".into(),
-            Self::PluginJamendoPrimaryAction => "Default action".into(),
-            Self::PluginJamendoDownloadDir => "Download path".into(),
 
             Self::QueueColumn(index) => format!("Column {}", index + 1),
             Self::AddQueueColumn => "Add column".into(),
@@ -279,6 +285,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::LocalPlaylistDir,
         SettingItem::ScanOnStart,
         SettingItem::Rescan,
+        SettingItem::SyncLibrary,
         SettingItem::ThemePreset,
         SettingItem::Glyphs,
         SettingItem::CoverWidth,
@@ -295,6 +302,11 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::DiscordCoverArt,
         SettingItem::FetchOnlineLyrics,
         SettingItem::LrclibUrl,
+        SettingItem::AgroEnabled,
+        SettingItem::AgroDeviceName,
+        SettingItem::AgroServer,
+        SettingItem::AgroUsername,
+        SettingItem::AgroPassphrase,
     ]);
 
     #[cfg(feature = "nyaa")]
@@ -308,10 +320,6 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::PluginArchiveEnabled,
         SettingItem::PluginArchivePrimaryAction,
         SettingItem::PluginArchiveDownloadDir,
-        SettingItem::PluginJamendoEnabled,
-        SettingItem::PluginJamendoClientId,
-        SettingItem::PluginJamendoPrimaryAction,
-        SettingItem::PluginJamendoDownloadDir,
     ]);
 
     rows.extend((0..config.queue_columns.len()).map(SettingItem::QueueColumn));
@@ -371,6 +379,17 @@ fn value_of(app: &App, item: SettingItem) -> String {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(not set — local playlists disabled)".into()),
         SettingItem::ScanOnStart => on_off(config.local.scan_on_start),
+        SettingItem::SyncLibrary => {
+            if !config.agro.enabled {
+                "pair with Agro first".into()
+            } else if config.sync.enabled {
+                "uploading local files  [Enter to sync now]".into()
+            } else if config.sync.report_holdings {
+                "reporting what you hold, not uploading  [Enter to sync now]".into()
+            } else {
+                "off — set sync.enabled in config.toml".into()
+            }
+        }
         SettingItem::Rescan => app.scan_status.clone().unwrap_or_else(|| {
             // Report what the persisted index already holds, so the row is
             // informative before the user has scanned anything this session.
@@ -441,6 +460,46 @@ fn value_of(app: &App, item: SettingItem) -> String {
                 config.lyrics.lrclib_url.clone()
             }
         }
+        SettingItem::AgroEnabled => {
+            if config.agro.enabled {
+                if config.agro.passphrase.trim().is_empty() {
+                    "Enabled (enter passphrase below)".into()
+                } else {
+                    format!("Enabled — Synced ({})", if config.agro.server.is_empty() { "http://127.0.0.1:8700" } else { &config.agro.server })
+                }
+            } else {
+                "Disabled".into()
+            }
+        },
+        SettingItem::AgroDeviceName => {
+            let petname = config
+                .agro
+                .device_name
+                .clone()
+                .unwrap_or_else(|| crate::integrations::agro::generate_petname(&config.agro.device_id));
+            format!("{} (wander)", petname)
+        }
+        SettingItem::AgroServer => {
+            if config.agro.server.is_empty() {
+                "http://127.0.0.1:8700 (default)".into()
+            } else {
+                config.agro.server.clone()
+            }
+        }
+        SettingItem::AgroUsername => {
+            if config.agro.username.is_empty() {
+                "alpha (default)".into()
+            } else {
+                config.agro.username.clone()
+            }
+        }
+        SettingItem::AgroPassphrase => {
+            if config.agro.passphrase.is_empty() {
+                "(not paired)".into()
+            } else {
+                "•••••••• (configured)".into()
+            }
+        }
 
         #[cfg(feature = "nyaa")]
         SettingItem::PluginNyaaEnabled => on_off(config.plugins.nyaa.enabled),
@@ -466,26 +525,6 @@ fn value_of(app: &App, item: SettingItem) -> String {
         SettingItem::PluginArchiveDownloadDir => config
             .plugins
             .archive
-            .download_dir
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "(default: local music folder)".into()),
-
-        SettingItem::PluginJamendoEnabled => on_off(config.plugins.jamendo.enabled),
-        SettingItem::PluginJamendoClientId => {
-            if config.plugins.jamendo.client_id.trim().is_empty() {
-                "(not set — free key at devportal.jamendo.com)".into()
-            } else {
-                config.plugins.jamendo.client_id.clone()
-            }
-        }
-        SettingItem::PluginJamendoPrimaryAction => format!(
-            "{}  (Left/Right/Enter to toggle)",
-            config.plugins.jamendo.primary_action.label()
-        ),
-        SettingItem::PluginJamendoDownloadDir => config
-            .plugins
-            .jamendo
             .download_dir
             .as_ref()
             .map(|p| p.display().to_string())
@@ -768,12 +807,18 @@ mod tests {
     }
 
     #[test]
-    fn only_the_password_row_is_secret() {
+    fn only_credential_rows_are_secret() {
         let secret: Vec<SettingItem> = rows(&Config::default())
             .into_iter()
             .filter(|item| item.is_secret())
             .collect();
-        assert_eq!(secret, vec![SettingItem::ServerPassword]);
+        // The Agro passphrase joined the server password as a credential: both are masked, and
+        // nothing else on the screen should be.
+        assert_eq!(
+            secret,
+            vec![SettingItem::ServerPassword, SettingItem::AgroPassphrase]
+        );
         assert!(SettingItem::ServerPassword.is_text());
+        assert!(SettingItem::AgroPassphrase.is_text());
     }
 }

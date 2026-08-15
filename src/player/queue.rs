@@ -77,6 +77,15 @@ impl Queue {
             .collect()
     }
 
+    /// The queue in play order, paired with the position of the current track within it.
+    ///
+    /// Play order rather than insertion order, because a queue handed to another device has to
+    /// continue the way it would have continued here — with shuffle applied, not undone.
+    pub fn in_play_order(&self) -> (Vec<Song>, Option<usize>) {
+        let songs = self.order.iter().map(|&i| self.songs[i].clone()).collect();
+        (songs, self.position)
+    }
+
     /// Index into `songs` of the currently playing track.
     pub fn current_index(&self) -> Option<usize> {
         self.position.map(|p| self.order[p])

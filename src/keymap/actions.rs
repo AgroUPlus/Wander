@@ -81,6 +81,8 @@ pub enum Action {
     UndoQueue,
     /// Full-screen now-playing view.
     ToggleFocusMode,
+    /// Transfer and resume active playback from another paired Agro device.
+    AgroTransferPlayback,
 }
 
 /// Section of the cheat sheet an action belongs to.
@@ -123,7 +125,7 @@ impl Action {
         use Action::*;
         match self {
             TogglePause | Stop | NextTrack | PrevTrack | SeekForward | SeekBackward | VolumeUp
-            | VolumeDown | ToggleRepeat | ToggleShuffle | ToggleRadio => Category::Playback,
+            | VolumeDown | ToggleRepeat | ToggleShuffle | ToggleRadio | AgroTransferPlayback => Category::Playback,
             NextTab | PrevTab | TabBack | Tab(_) | Up | Down | PageUp | PageDown | Top | Bottom
             | Left | Right | FocusNext | FocusPrev | Confirm | Cancel => Category::Navigation,
             LibraryModeNext | LibraryModePrev | JumpToArtist | JumpToAlbum | ToggleStar
@@ -200,6 +202,7 @@ impl Action {
             Action::OpenPalette => "go to anything (fuzzy)",
             Action::UndoQueue => "undo queue change",
             Action::ToggleFocusMode => "focus mode (full screen)",
+            Action::AgroTransferPlayback => "transfer playback from another device (Agro)",
             // Not worth a help line.
             Action::Tab(_) | Action::Cancel => return None,
         })
@@ -287,6 +290,7 @@ impl Action {
             OpenPalette,
             UndoQueue,
             ToggleFocusMode,
+            AgroTransferPlayback,
         ]
     };
 

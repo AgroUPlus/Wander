@@ -341,6 +341,23 @@ impl App {
             Action::SeekBackward => self.player.send(PlayerCommand::SeekBackward),
             Action::VolumeUp => self.player.send(PlayerCommand::AdjustVolume(VOLUME_STEP)),
             Action::VolumeDown => self.player.send(PlayerCommand::AdjustVolume(-VOLUME_STEP)),
+            Action::AgroTransferPlayback => {
+                let remote_store = crate::integrations::agro::get_remote_handoff();
+                if let Ok(guard) = remote_store.try_read() {
+                    if let Some(handoff) = guard.as_ref() {
+                        self.status_message = Some(format!(
+                            "Transferred from {}: {} • {} ({}s)",
+                            handoff.petname,
+                            handoff.track_title,
+                            handoff.artist_name,
+                            handoff.position_ms / 1000
+                        ));
+                        self.player.send(PlayerCommand::SeekTo(std::time::Duration::from_millis(handoff.position_ms as u64)));
+                    } else {
+                        self.status_message = Some("No active playback stream on other Agro devices".into());
+                    }
+                }
+            }
 
             Action::AddToQueue => {
                 let songs = self.selected_songs();

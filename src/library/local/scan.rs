@@ -144,6 +144,7 @@ fn read_track(path: &Path, mtime: u64, size: u64) -> Option<LocalTrack> {
                 duration: 0,
                 bit_rate: 0,
                 suffix,
+                content_hash: None,
             });
         }
     };
@@ -187,6 +188,8 @@ fn read_track(path: &Path, mtime: u64, size: u64) -> Option<LocalTrack> {
         duration,
         bit_rate,
         suffix,
+        // Filled in later by the sync task; see LocalTrack::content_hash.
+        content_hash: None,
     })
 }
 

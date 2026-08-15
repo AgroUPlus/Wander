@@ -31,6 +31,8 @@ pub enum Overlay {
     Palette(PaletteState),
     /// First-run welcome, shown when nothing is configured yet.
     Setup(SetupState),
+    /// "Another device has music you don't — fetch it?"
+    Sync(SyncState),
 }
 
 impl Overlay {
@@ -42,6 +44,7 @@ impl Overlay {
             Overlay::Playlist(_) => 1,
             Overlay::Palette(_) => 2,
             Overlay::Setup(_) => 3,
+            Overlay::Sync(_) => 4,
         }
     }
 }
@@ -282,6 +285,44 @@ pub struct ShareState {
     pub result: Option<Result<String, String>>,
 }
 
+/// The offer to pull down tracks another device has.
+///
+/// Shaped like [`ShareState`]: a modal that describes something, waits for a decision, and then
+/// reports what happened. `pending` and `result` play exactly the same roles.
+#[derive(Debug)]
+pub struct SyncState {
+    pub missing: Vec<crate::integrations::sync::MissingTrack>,
+    /// A fetch is in flight.
+    pub pending: bool,
+    /// Set once the fetch finishes: how many arrived, or why none did.
+    pub result: Option<Result<usize, String>>,
+}
+
+impl SyncState {
+    pub fn new(missing: Vec<crate::integrations::sync::MissingTrack>) -> Self {
+        Self {
+            missing,
+            pending: false,
+            result: None,
+        }
+    }
+
+    /// A few names rather than only a count. "412 tracks" is a chore; naming three of them is a
+    /// decision the user can actually make.
+    pub fn sample(&self) -> Vec<String> {
+        self.missing
+            .iter()
+            .take(3)
+            .map(|t| format!("{} — {}", t.artist, t.title))
+            .collect()
+    }
+
+    /// Total size of the transfer, so the user can weigh it before agreeing to it.
+    pub fn total_bytes(&self) -> i64 {
+        self.missing.iter().map(|t| t.size_bytes).sum()
+    }
+}
+
 impl ShareState {
     pub fn new(songs: Vec<Song>) -> Self {
         let label = match songs.as_slice() {
@@ -363,6 +404,72 @@ pub fn draw(frame: &mut Frame, area: Rect, overlay: &Overlay, theme: &Theme, gly
         Overlay::Playlist(state) => draw_playlist(frame, area, state, theme),
         Overlay::Palette(state) => draw_palette(frame, area, state, theme, glyphs),
         Overlay::Setup(state) => draw_setup(frame, area, state, theme),
+        Overlay::Sync(state) => draw_sync(frame, area, state, theme),
+    }
+}
+
+/// The sync offer. Names a few tracks and the size of the transfer, because "412 tracks" alone is
+/// not enough to decide on.
+fn draw_sync(frame: &mut Frame, area: Rect, state: &SyncState, theme: &Theme) {
+    let rect = centered(area, 62, 14);
+    frame.render_widget(Clear, rect);
+    let block = popup_block("Sync from your other devices", theme);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let mut lines: Vec<Line> = Vec::new();
+
+    match &state.result {
+        Some(Ok(count)) => {
+            lines.push(Line::styled(format!("Fetched {count} tracks."), theme.title()));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled("Enter to close", theme.dim()));
+        }
+        Some(Err(error)) => {
+            lines.push(Line::styled("Could not fetch them", theme.title()));
+            lines.push(Line::raw(""));
+            lines.push(Line::raw(error.clone()));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled("Enter to close", theme.dim()));
+        }
+        None => {
+            let count = state.missing.len();
+            lines.push(Line::styled(
+                format!(
+                    "{count} track{} on your other devices are not here.",
+                    if count == 1 { "" } else { "s" }
+                ),
+                theme.title(),
+            ));
+            lines.push(Line::raw(""));
+            for entry in state.sample() {
+                lines.push(Line::raw(format!("  {entry}")));
+            }
+            if count > 3 {
+                lines.push(Line::styled(format!("  …and {} more", count - 3), theme.dim()));
+            }
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                format!("About {}", human_bytes(state.total_bytes())),
+                theme.dim(),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(Line::styled(
+                if state.pending { "Fetching…" } else { "Enter to fetch · Esc to dismiss" },
+                theme.dim(),
+            ));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn human_bytes(bytes: i64) -> String {
+    const GB: i64 = 1024 * 1024 * 1024;
+    const MB: i64 = 1024 * 1024;
+    match bytes {
+        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{} MB", b / MB),
+        b => format!("{} KB", (b / 1024).max(1)),
     }
 }
 

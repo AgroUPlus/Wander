@@ -182,6 +182,9 @@ impl App {
                 }
             }
             LoadEvent::Genres(genres) => self.library_genres = genres,
+            LoadEvent::SyncFinished(result) => self.on_sync_finished(result),
+            LoadEvent::SyncOffer(missing) => self.on_sync_offer(missing),
+            LoadEvent::SyncFetched(result) => self.on_sync_fetched(result),
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {
                     state.pending = false;

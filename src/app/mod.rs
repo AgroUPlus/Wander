@@ -20,6 +20,7 @@ pub(crate) mod loading;
 pub(crate) mod navigation;
 pub(crate) mod overlays;
 pub(crate) mod settings;
+mod sync;
 pub(crate) mod storage;
 #[cfg(test)]
 mod tests;

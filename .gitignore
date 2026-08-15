@@ -2,3 +2,7 @@
 /src/plugins/nyaa.rs
 /src/plugins/nyaa/
 /*.patch
+
+# Scratch files: a probe harness with local cache paths in it, and a working review note.
+scratch_probe.rs
+code-review-findings.md

@@ -25,10 +25,80 @@ pub struct Config {
     pub local: LocalConfig,
     pub lyrics: LyricsConfig,
     pub plugins: PluginsConfig,
+    pub agro: AgroConfig,
+    pub sync: SyncConfig,
     /// Key overrides, e.g. `"ctrl+p" = "open_palette"`. `"none"` unbinds a key.
     /// Anything not listed keeps its default binding.
     #[serde(default)]
     pub keys: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgroConfig {
+    pub enabled: bool,
+    #[serde(alias = "url")]
+    pub server: String,
+    pub username: String,
+    #[serde(alias = "api_key")]
+    pub passphrase: String,
+    pub device_id: String,
+    pub device_name: Option<String>,
+    pub sync_settings: bool,
+}
+
+/// Sending this machine's local music to Agro.
+///
+/// Separate from [`AgroConfig`] because it is a separate decision: pairing with Agro was about
+/// playback handoff, and uploading a music collection to a server is not something to start doing
+/// because handoff was switched on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncConfig {
+    /// Off unless asked for. Nothing is uploaded while this is false.
+    pub enabled: bool,
+    /// Hash and report local files even with `enabled` off.
+    ///
+    /// Worth doing on its own: it is what lets Agro answer "that machine has a track you don't"
+    /// without a single byte of audio leaving this one.
+    pub report_holdings: bool,
+    /// Files hashed per pass. Hashing reads every byte, so this is the knob for how much disk IO
+    /// a single sync run is allowed to cost.
+    pub hash_batch: usize,
+    /// Files uploaded per pass.
+    pub upload_batch: usize,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            report_holdings: true,
+            hash_batch: 200,
+            upload_batch: 25,
+        }
+    }
+}
+
+fn default_device_id() -> String {
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "desktop".to_string());
+    format!("wander-{}", hostname)
+}
+
+impl Default for AgroConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server: "http://127.0.0.1:8700".to_string(),
+            username: "alpha".to_string(),
+            passphrase: String::new(),
+            device_id: default_device_id(),
+            device_name: None,
+            sync_settings: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,6 +248,8 @@ impl Default for Config {
             local: LocalConfig::default(),
             lyrics: LyricsConfig::default(),
             plugins: PluginsConfig::default(),
+            agro: AgroConfig::default(),
+            sync: SyncConfig::default(),
             keys: std::collections::HashMap::new(),
         }
     }

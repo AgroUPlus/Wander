@@ -104,6 +104,17 @@ impl App {
                 KeyCode::Enter if !state.pending => self.submit_share(),
                 _ => {}
             },
+            Overlay::Sync(state) => match key.code {
+                KeyCode::Esc => self.overlay = None,
+                // Once the fetch has answered there is nothing left to decide.
+                _ if state.result.is_some() => {
+                    if key.code == KeyCode::Enter {
+                        self.overlay = None;
+                    }
+                }
+                KeyCode::Enter if !state.pending => self.accept_sync_offer(),
+                _ => {}
+            },
             Overlay::Playlist(state) => match key.code {
                 KeyCode::Esc => {
                     if state.creating {

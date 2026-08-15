@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
     let mut spectrum = player::spectrum::Spectrum::new(tap, player.shared.sample_rate(), 32);
 
     let discord_config = config.discord.clone();
+    let agro_config = config.agro.clone();
 
     let (load_tx, mut load_rx) = mpsc::unbounded_channel();
 
@@ -129,6 +130,17 @@ async fn main() -> Result<()> {
         app.rescan_local_library();
     }
 
+    // Report what this machine holds, once, on startup.
+    //
+    // Without this the library index only ever updates when someone remembers to open Settings
+    // and press a key, which is not what "background sync" should mean. It is cheap by default:
+    // `sync.report_holdings` sends metadata only, and `sync.enabled` — which actually moves audio
+    // — stays off unless it has been asked for. Set both to false to opt out entirely.
+    if app.config.agro.enabled && (app.config.sync.report_holdings || app.config.sync.enabled) {
+        app.sync_library();
+        app.check_sync_offers();
+    }
+
     // Publish to MPRIS so the desktop bar, lock screen, playerctl and media
     // keys all see us. A missing session bus must not stop playback, so a
     // failure here is only reported in the status line.
@@ -149,6 +161,9 @@ async fn main() -> Result<()> {
         Err(err) => app.status_message = Some(format!("Discord: {err:#}")),
     }
 
+    // Agro sync is optional and modular, quietly synchronizing hand-off and state.
+    let _ = integrations::agro::spawn(app.player.clone(), agro_config);
+
     let result = run(
         &mut terminal,
         &mut app,
@@ -157,6 +172,10 @@ async fn main() -> Result<()> {
         &mut load_rx,
     )
     .await;
+
+    // Before the terminal is handed back: tell Agro this device stopped, so the other clients
+    // stop showing it as listening rather than waiting for the online window to lapse.
+    integrations::agro::announce_stopped(&app.player).await;
 
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();

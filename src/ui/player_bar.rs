@@ -249,10 +249,26 @@ fn draw_track_row(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits:
             frame.render_widget(Paragraph::new(Line::from(spans)), columns[1]);
         }
         (None, None) => {
-            frame.render_widget(
-                Paragraph::new("Nothing playing").style(theme.dim()),
-                columns[1],
-            );
+            let remote_opt = crate::integrations::agro::get_remote_handoff();
+            let remote_guard = remote_opt.try_read();
+            if let Ok(guard) = remote_guard
+                && let Some(remote) = guard.as_ref()
+            {
+                let text = format!(
+                    "Playing on {}: \"{}\" • {} (Shift+H to resume here)",
+                    remote.petname, remote.track_title, remote.artist_name
+                );
+                let line = Line::from(vec![
+                    Span::styled("● ", theme.title()),
+                    Span::styled(truncate(&text, columns[1].width as usize), theme.playing()),
+                ]);
+                frame.render_widget(Paragraph::new(line), columns[1]);
+            } else {
+                frame.render_widget(
+                    Paragraph::new("Nothing playing").style(theme.dim()),
+                    columns[1],
+                );
+            }
         }
     };
 

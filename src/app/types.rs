@@ -196,6 +196,12 @@ pub enum LoadEvent {
     },
     /// A share link, or the reason the server refused to make one.
     ShareCreated(Result<String, String>),
+    /// One sync pass finished: how many files were hashed and uploaded, or why it stopped.
+    SyncFinished(Result<SyncSummary, String>),
+    /// The server's answer to "what am I missing", ready to offer.
+    SyncOffer(Vec<crate::integrations::sync::MissingTrack>),
+    /// A peer fetch finished: how many files arrived, or why none did.
+    SyncFetched(Result<usize, String>),
     /// Seed tracks for a Home mix.
     Mix {
         name: String,
@@ -317,6 +323,8 @@ pub enum OperationKind {
     Search,
     ConnectionTest,
     LyricFetch,
+    /// Hashing, reporting and uploading the local library to Agro.
+    Sync,
 }
 
 impl OperationKind {
@@ -327,8 +335,19 @@ impl OperationKind {
             OperationKind::Search => "SEARCH",
             OperationKind::ConnectionTest => "CONNECT",
             OperationKind::LyricFetch => "LYRICS",
+            OperationKind::Sync => "SYNC",
         }
     }
+}
+
+/// What one sync pass achieved, for the notification afterwards.
+#[derive(Debug, Clone, Default)]
+pub struct SyncSummary {
+    pub hashed: usize,
+    pub uploaded: usize,
+    pub already_present: usize,
+    /// Still to do — a pass is deliberately bounded, so this is normal rather than a failure.
+    pub remaining: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

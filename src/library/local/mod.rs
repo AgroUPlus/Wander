@@ -731,6 +731,7 @@ mod tests {
                 duration: 0,
                 bit_rate: 0,
                 suffix: Some("flac".into()),
+                content_hash: None,
             }],
             roots: Vec::new(),
         };
