@@ -179,6 +179,26 @@ viz_low = "#89b4fa"
 viz_high = "#f5e0dc"
 ```
 
+### Share links on your own domain
+
+Optional. By default a share hands out the link Navidrome minted, which only works for someone who
+can reach that server. Point a domain of yours at a `/listen` forwarder — Agro serves one — and
+shares go out as `https://your-domain/listen?u=…` instead, resolving wherever the recipient is.
+
+```toml
+[share]
+domain = "frwd.top"
+hosts = ["music.example.com"]   # your music server; YouTube's hosts are always allowed
+```
+
+`hosts` is an allowlist, and anything outside it is shared untouched rather than wrapped: a
+forwarder that will send a visitor to any address handed to it is an open redirect wearing your
+domain.
+
+A paired Agro server can publish this for every player at once (its dashboard, under **Share
+Links**), and when it does, its value wins over the file above. Agro is optional in both
+directions — without it this config still works, and without either, links are the server's own.
+
 ### Customizing Keybindings
 
 Override default keys by adding a `[keys]` table to `config.toml`:
