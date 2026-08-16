@@ -653,6 +653,63 @@ pub fn note_play(record: &crate::history::PlayRecord) {
     });
 }
 
+/// Sends the play log this machine already had, once per account.
+///
+/// [`note_play`] only ever sees plays that happen while it is running, so switching Agro on left
+/// the fleet's statistics starting from zero for this device — months of local history sitting in
+/// `history.jsonl` and counting for nothing. This offers the lot.
+///
+/// Marked done by a file naming the account, so it runs again if the machine is later pointed at a
+/// different one. Re-running is harmless in any case: the server is idempotent on
+/// (account, artist, title, time), so a play it already holds is ignored rather than doubled.
+///
+/// Sent in chunks because a long history is well past what one request should carry, and directly
+/// rather than through the outbox, whose bound is sized for live listening rather than a year of
+/// backlog.
+async fn backfill_history(client: &AgroClient, device_name: &str) {
+    let Some(marker) = crate::paths::cache_dir().map(|dir| dir.join(BACKFILL_MARKER)) else {
+        return;
+    };
+    if std::fs::read_to_string(&marker).is_ok_and(|done| done.trim() == client.username) {
+        return;
+    }
+
+    let records = crate::history::load();
+    if records.is_empty() {
+        // Still marked: an empty log is a finished backfill, and leaving the marker off would mean
+        // re-reading the file on every launch for ever.
+        let _ = std::fs::write(&marker, &client.username);
+        return;
+    }
+
+    for chunk in records.chunks(BACKFILL_CHUNK) {
+        let batch: Vec<PendingScrobble> = chunk
+            .iter()
+            .map(|record| PendingScrobble {
+                title: record.title.clone(),
+                artist: record.artist.clone(),
+                album: record.album.clone(),
+                genres: record.genres.clone(),
+                secs: record.secs,
+                at: record.at,
+            })
+            .collect();
+        // Give up on the first failure and leave the marker unwritten, so the whole backfill is
+        // retried next launch rather than half of it being silently skipped.
+        if client.record_scrobbles(device_name, &batch).await.is_err() {
+            return;
+        }
+    }
+
+    let _ = std::fs::write(&marker, &client.username);
+}
+
+/// Names the account whose history has already been uploaded from this machine.
+const BACKFILL_MARKER: &str = "agro-history-backfilled";
+
+/// Plays per backfill request. Comfortably under the server's own per-request cap.
+const BACKFILL_CHUNK: usize = 400;
+
 /// Sends whatever is waiting, putting it back if the server could not be reached.
 async fn drain_scrobbles(client: &AgroClient, device_name: &str) {
     let batch: Vec<PendingScrobble> = {
@@ -702,6 +759,10 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
     tokio::spawn(async move {
         // Initial node registration
         let _ = client.register_node(initial_name.as_deref(), None).await;
+
+        // Before anything else this device reports, so the fleet's totals include the listening
+        // that happened before Agro was switched on rather than starting from zero.
+        backfill_history(&client, &device_label).await;
 
         let mut last_song_id = String::new();
         let mut last_paused = true;
