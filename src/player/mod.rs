@@ -460,7 +460,11 @@ impl PlayerTask {
         if let Some(song) = finished {
             // Also logged locally: the server keeps counts, not a play log, and
             // the Home tab's statistics need the timeline.
-            crate::history::append(&crate::history::PlayRecord::from_song(&song));
+            let record = crate::history::PlayRecord::from_song(&song);
+            crate::history::append(&record);
+            // Also queued for Agro, when a server is configured. The local append stays
+            // unconditional so an unreachable — or absent — server never costs a play.
+            crate::integrations::agro::note_play(&record);
             let library = Arc::clone(&self.library);
             tokio::spawn(async move {
                 let _ = library.scrobble(&song.id, true).await;

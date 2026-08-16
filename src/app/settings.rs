@@ -230,6 +230,20 @@ impl App {
                     }
                 ));
             }
+            SettingItem::AgroCentralStats => {
+                self.config.agro.central_stats = !self.config.agro.central_stats;
+                let _ = self.config.save();
+                if self.config.agro.central_stats {
+                    self.refresh_central_stats();
+                    self.status_message =
+                        Some("Statistics now cover every device on this account".into());
+                } else {
+                    // Straight back to the local numbers rather than leaving the fleet's on
+                    // screen, which would look like the toggle had not taken.
+                    self.stats = crate::history::stats(&self.history, 5);
+                    self.status_message = Some("Statistics are this machine's again".into());
+                }
+            }
             SettingItem::AgroEnabled => {
                 self.config.agro.enabled = !self.config.agro.enabled;
                 let _ = self.config.save();

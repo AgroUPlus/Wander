@@ -46,6 +46,12 @@ pub struct AgroConfig {
     pub device_id: String,
     pub device_name: Option<String>,
     pub sync_settings: bool,
+    /// Read listening statistics from Agro instead of from this machine's own play log.
+    ///
+    /// Off by default, because the local log is what this install already has and switching a
+    /// device to the fleet's totals should be a decision, not something that happens on upgrade.
+    /// Plays are reported to Agro either way — the flag only decides where the Home tab reads.
+    pub central_stats: bool,
 }
 
 /// Where share links go out.
@@ -116,6 +122,7 @@ impl Default for AgroConfig {
             device_id: default_device_id(),
             device_name: None,
             sync_settings: true,
+            central_stats: false,
         }
     }
 }

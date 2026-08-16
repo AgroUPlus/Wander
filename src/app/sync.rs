@@ -68,6 +68,39 @@ impl App {
         });
     }
 
+    /// Whether the Home tab's statistics come from Agro rather than this machine's play log.
+    pub(crate) fn central_stats(&self) -> bool {
+        let agro = &self.config.agro;
+        agro.enabled
+            && agro.central_stats
+            && !agro.passphrase.trim().is_empty()
+            && !agro.server.trim().is_empty()
+    }
+
+    /// Replaces the displayed statistics with the fleet's, when that is what is configured.
+    ///
+    /// Quiet on failure, and quiet by *doing nothing* rather than by falling back: silently
+    /// swapping in this machine's own numbers would show a smaller total with no indication that
+    /// it means something different. The last good figures stay on screen until the next attempt.
+    pub fn refresh_central_stats(&mut self) {
+        if !self.central_stats() {
+            return;
+        }
+        let agro = self.config.agro.clone();
+        let loads = self.loads.clone();
+        tokio::spawn(async move {
+            let client = crate::integrations::agro::AgroClient::new(
+                agro.server.clone(),
+                agro.username.clone(),
+                agro.passphrase.clone(),
+                agro.device_id.clone(),
+            );
+            if let Ok(stats) = client.fetch_stats("ALL").await {
+                let _ = loads.send(LoadEvent::Stats(stats));
+            }
+        });
+    }
+
     /// Hashes, reports and (if enabled) uploads one batch.
     pub fn sync_library(&mut self) {
         let Some(client) = self.sync_client() else {

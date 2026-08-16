@@ -202,8 +202,14 @@ impl App {
             if !new_records.is_empty() || offset != self.history_bytes {
                 self.history_bytes = offset;
                 self.history.extend(new_records);
-                self.stats = crate::history::stats(&self.history, 5);
+                // The local log keeps being maintained even when it is not what is shown: it is
+                // the fallback, and the only thing left if centralised statistics are turned off
+                // again or the server goes away.
+                if !self.central_stats() {
+                    self.stats = crate::history::stats(&self.history, 5);
+                }
             }
+            self.refresh_central_stats();
         }
     }
 

@@ -213,6 +213,42 @@ impl AgroClient {
         Ok(())
     }
 
+    pub async fn create_short_link(&self, target_url: &str) -> Result<String> {
+        let mutation = r#"
+            mutation CreateShortLink($userId: String, $targetUrl: String!, $source: String) {
+                createShortLink(userId: $userId, targetUrl: $targetUrl, source: $source)
+            }
+        "#;
+        // Attributed to the account, which is what makes the link appear in Agro's link manager —
+        // an unowned link could be minted but never listed, counted or revoked.
+        let body = json!({
+            "query": mutation,
+            "variables": {
+                "userId": self.username,
+                "targetUrl": target_url,
+                "source": "navidrome"
+            }
+        });
+        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
+        let res = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .json(&body)
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            anyhow::bail!("Agro server returned status {}", res.status());
+        }
+        let json_data: serde_json::Value = res.json().await?;
+        let uid = json_data
+            .get("data")
+            .and_then(|d| d.get("createShortLink"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Failed to extract createShortLink UID from Agro response"))?;
+        Ok(uid.to_string())
+    }
+
     pub async fn fetch_latest_handoff(&self) -> Result<Option<RemoteHandoff>> {
         let query = r#"
             query GetHandoff($userId: String!) {
@@ -286,6 +322,134 @@ impl AgroClient {
     /// Configured once on Agro and read by every player, so the fleet agrees without the domain
     /// being typed into each one. `None` for a server that has the feature off, does not know the
     /// fields, or cannot be reached — all of which leave the local `[share]` config in charge.
+    /// Reports completed plays.
+    ///
+    /// The server is idempotent on (account, artist, title, time), so re-sending a batch this
+    /// client was unsure about is safe — which is what lets the outbox retry rather than having to
+    /// know whether a timed-out request actually landed.
+    async fn record_scrobbles(&self, device_name: &str, plays: &[PendingScrobble]) -> Result<()> {
+        let mutation = r#"
+            mutation RecordScrobbles(
+                $userId: String!, $deviceName: String!, $clientType: String,
+                $entries: [ScrobbleInput!]!
+            ) {
+                recordScrobbles(
+                    userId: $userId, deviceName: $deviceName, clientType: $clientType,
+                    entries: $entries
+                )
+            }
+        "#;
+
+        let entries: Vec<serde_json::Value> = plays
+            .iter()
+            .map(|play| {
+                json!({
+                    "trackTitle": play.title,
+                    "artistName": play.artist,
+                    "albumName": play.album,
+                    // One genre, because that is what the server stores. The first is the primary
+                    // one on every backend that reports more than one.
+                    "genre": play.genres.first(),
+                    "durationSecs": play.secs as i64,
+                    "playedAt": rfc3339(play.at),
+                })
+            })
+            .collect();
+
+        let body = json!({
+            "query": mutation,
+            "variables": {
+                "userId": self.username,
+                "deviceName": device_name,
+                "clientType": "wander",
+                "entries": entries,
+            }
+        });
+
+        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
+        let res = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            anyhow::bail!("agro rejected the scrobble batch: {}", res.status());
+        }
+        // A GraphQL error arrives with a 200, so the body has to be looked at too — otherwise a
+        // rejected batch is silently dropped from the outbox.
+        let payload: serde_json::Value = res.json().await?;
+        if payload.get("errors").is_some_and(|e| !e.is_null()) {
+            anyhow::bail!("agro rejected the scrobble batch");
+        }
+        Ok(())
+    }
+
+    /// The fleet's listening statistics, in the same shape the local ones are computed in.
+    ///
+    /// Returning [`crate::history::Stats`] rather than a type of its own is the point: every
+    /// consumer — the Home tab, the mix seeding, the Discover shelf — keeps reading exactly what it
+    /// always read, and only where the numbers come from changes.
+    pub async fn fetch_stats(&self, period: &str) -> Result<crate::history::Stats> {
+        let query = r#"
+            query Stats($userId: String!, $period: String) {
+                listeningStats(userId: $userId, period: $period) {
+                    secsToday secsWeek secsTotal playsTotal streak
+                    topArtists { name value }
+                    topAlbums { name value }
+                    topTracks { name value }
+                    topGenres { name value }
+                    byDay
+                    heatmap
+                    byHour
+                }
+            }
+        "#;
+
+        let body = json!({
+            "query": query,
+            "variables": { "userId": self.username, "period": period }
+        });
+
+        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
+        let res = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .json(&body)
+            .send()
+            .await?;
+
+        let payload: serde_json::Value = res.json().await?;
+        let stats = payload
+            .get("data")
+            .and_then(|d| d.get("listeningStats"))
+            .filter(|s| !s.is_null())
+            .ok_or_else(|| anyhow::anyhow!("agro returned no statistics"))?;
+
+        let mut by_hour = [0u64; 24];
+        for (index, value) in numbers(stats.get("byHour")).into_iter().take(24).enumerate() {
+            by_hour[index] = value;
+        }
+
+        Ok(crate::history::Stats {
+            secs_today: number(stats.get("secsToday")),
+            secs_week: number(stats.get("secsWeek")),
+            secs_total: number(stats.get("secsTotal")),
+            plays_total: number(stats.get("playsTotal")) as usize,
+            streak: number(stats.get("streak")) as u32,
+            top_artists: entries(stats.get("topArtists")),
+            top_albums: entries(stats.get("topAlbums")),
+            top_tracks: entries(stats.get("topTracks")),
+            top_genres: entries(stats.get("topGenres")),
+            by_day: numbers(stats.get("byDay")),
+            heatmap: numbers(stats.get("heatmap")),
+            by_hour,
+        })
+    }
+
     pub async fn fetch_share_domain(&self) -> Result<Option<ShareDomain>> {
         let query = r#"
             query ShareSettings($userId: String!) {
@@ -383,6 +547,136 @@ pub async fn announce_stopped(player: &PlayerHandle) {
     .await;
 }
 
+/// A Unix timestamp as RFC3339 UTC, which is what Agro stores plays as.
+///
+/// Written out rather than pulled from a date crate: this is the only date formatting in the whole
+/// binary, and a dependency for twenty lines of arithmetic is a poor trade. The algorithm is
+/// Howard Hinnant's civil-from-days, shifting the epoch to March so leap days land at the end of
+/// the year and the month arithmetic needs no table.
+fn rfc3339(at: i64) -> String {
+    let days = at.div_euclid(86_400);
+    let secs_of_day = at.rem_euclid(86_400);
+
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        secs_of_day / 3600,
+        (secs_of_day % 3600) / 60,
+        secs_of_day % 60
+    )
+}
+
+fn number(value: Option<&serde_json::Value>) -> u64 {
+    value.and_then(|v| v.as_i64()).unwrap_or(0).max(0) as u64
+}
+
+fn numbers(value: Option<&serde_json::Value>) -> Vec<u64> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| item.as_i64().unwrap_or(0).max(0) as u64)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn entries(value: Option<&serde_json::Value>) -> Vec<(String, u32)> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some((
+                        item.get("name")?.as_str()?.to_string(),
+                        item.get("value")?.as_i64().unwrap_or(0).max(0) as u32,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Plays waiting to be reported to Agro.
+///
+/// An outbox rather than a direct post from the player, for two reasons. The player has no
+/// configuration and no business acquiring any — it is handed a queue and a device. And a play that
+/// happened while the server was unreachable is still a play: buffering it here means a laptop that
+/// listened through an outage reports that listening the next time it connects, instead of losing
+/// it.
+static SCROBBLE_OUTBOX: std::sync::Mutex<Vec<PendingScrobble>> = std::sync::Mutex::new(Vec::new());
+
+/// Ceiling on the outbox. Reached only when Agro has been unreachable for a very long time, and at
+/// that point the oldest plays are the ones worth dropping.
+const MAX_OUTBOX: usize = 1_000;
+
+#[derive(Clone)]
+struct PendingScrobble {
+    title: String,
+    artist: String,
+    album: String,
+    genres: Vec<String>,
+    secs: u32,
+    at: i64,
+}
+
+/// Records a completed play for the background task to report.
+///
+/// Called unconditionally by the player, including when Agro is not configured — the buffer is
+/// bounded and simply never drained in that case, which costs a few kilobytes and keeps the call
+/// site free of a configuration check it is not in a position to make.
+pub fn note_play(record: &crate::history::PlayRecord) {
+    let Ok(mut outbox) = SCROBBLE_OUTBOX.lock() else {
+        return;
+    };
+    if outbox.len() >= MAX_OUTBOX {
+        outbox.remove(0);
+    }
+    outbox.push(PendingScrobble {
+        title: record.title.clone(),
+        artist: record.artist.clone(),
+        album: record.album.clone(),
+        genres: record.genres.clone(),
+        secs: record.secs,
+        at: record.at,
+    });
+}
+
+/// Sends whatever is waiting, putting it back if the server could not be reached.
+async fn drain_scrobbles(client: &AgroClient, device_name: &str) {
+    let batch: Vec<PendingScrobble> = {
+        let Ok(mut outbox) = SCROBBLE_OUTBOX.lock() else {
+            return;
+        };
+        if outbox.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *outbox)
+    };
+
+    if client.record_scrobbles(device_name, &batch).await.is_err() {
+        // Back onto the front of the queue, ahead of anything logged while the request was in
+        // flight, so the outbox stays in play order.
+        if let Ok(mut outbox) = SCROBBLE_OUTBOX.lock() {
+            let mut restored = batch;
+            restored.append(&mut outbox);
+            restored.truncate(MAX_OUTBOX);
+            *outbox = restored;
+        }
+    }
+}
+
 /// Spawns the lightweight Agro sync background task if enabled in configuration.
 pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
     if !config.enabled || config.passphrase.trim().is_empty() {
@@ -400,6 +694,11 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
     let remote_handoff_store = get_remote_handoff();
 
     let initial_name = config.device_name.clone();
+    // The name plays are attributed to. Falls back to the device id, which is always set, so a
+    // fleet with unnamed devices still gets a per-device breakdown rather than a blank row.
+    let device_label = initial_name
+        .clone()
+        .unwrap_or_else(|| client.device_id.clone());
     tokio::spawn(async move {
         // Initial node registration
         let _ = client.register_node(initial_name.as_deref(), None).await;
@@ -408,6 +707,7 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
         let mut last_paused = true;
         let mut last_update_time = std::time::Instant::now();
         let mut check_remote_tick = 0u64;
+        let mut scrobble_tick = 0u64;
 
         loop {
             let status = player.status();
@@ -486,9 +786,42 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                 }
             }
 
+            // Every fifth pass, so a listening session posts its plays within ten seconds without
+            // making a request on every tick of a two-second loop.
+            scrobble_tick += 1;
+            if scrobble_tick % 5 == 0 {
+                drain_scrobbles(&client, &device_label).await;
+            }
+
             sleep(Duration::from_secs(2)).await;
         }
+
+        // Unreachable in practice — the loop above never breaks — but written so the outbox has an
+        // owner at every point rather than only inside the tick.
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rfc3339;
+
+    /// Hand-rolled date arithmetic, so the cases that actually break it are the ones worth pinning:
+    /// the epoch, a leap day, the century rule, and a year boundary.
+    #[test]
+    fn formats_timestamps_as_utc_rfc3339() {
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339(1), "1970-01-01T00:00:01Z");
+        // 2024-02-29, a leap day in a leap year that is also divisible by four.
+        assert_eq!(rfc3339(1_709_164_800), "2024-02-29T00:00:00Z");
+        // 2000-02-29: divisible by 100 but also by 400, so it *is* a leap year.
+        assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
+        // 1900 was not a leap year; 1900-03-01 is the day after 1900-02-28.
+        assert_eq!(rfc3339(-2_203_977_600), "1900-02-28T00:00:00Z");
+        assert_eq!(rfc3339(-2_203_891_200), "1900-03-01T00:00:00Z");
+        // Last second of a year, and the first of the next.
+        assert_eq!(rfc3339(1_735_689_599), "2024-12-31T23:59:59Z");
+        assert_eq!(rfc3339(1_735_689_600), "2025-01-01T00:00:00Z");
+    }
 }

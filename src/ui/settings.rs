@@ -97,6 +97,8 @@ pub enum SettingItem {
     FetchOnlineLyrics,
     LrclibUrl,
     AgroEnabled,
+    /// Read the Home tab's statistics from Agro instead of this machine's own play log.
+    AgroCentralStats,
     AgroDeviceName,
     AgroServer,
     AgroUsername,
@@ -160,6 +162,7 @@ impl SettingItem {
             | Self::FetchOnlineLyrics
             | Self::LrclibUrl
             | Self::AgroEnabled
+            | Self::AgroCentralStats
             | Self::AgroDeviceName
             | Self::AgroServer
             | Self::AgroUsername
@@ -253,6 +256,7 @@ impl SettingItem {
             Self::FetchOnlineLyrics => "Online lyrics (LRCLIB)".into(),
             Self::LrclibUrl => "LRCLIB URL".into(),
             Self::AgroEnabled => "Agro sync daemon".into(),
+            Self::AgroCentralStats => "Fleet-wide statistics".into(),
             Self::AgroDeviceName => "Device name".into(),
             Self::AgroServer => "Agro server URL".into(),
             Self::AgroUsername => "Agro username".into(),
@@ -318,6 +322,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::FetchOnlineLyrics,
         SettingItem::LrclibUrl,
         SettingItem::AgroEnabled,
+        SettingItem::AgroCentralStats,
         SettingItem::AgroDeviceName,
         SettingItem::AgroServer,
         SettingItem::AgroUsername,
@@ -501,6 +506,15 @@ fn value_of(app: &App, item: SettingItem) -> String {
                 "https://lrclib.net (default)".into()
             } else {
                 config.lyrics.lrclib_url.clone()
+            }
+        }
+        SettingItem::AgroCentralStats => {
+            if !config.agro.enabled {
+                "Needs the Agro sync daemon".into()
+            } else if config.agro.central_stats {
+                "On — totals from every device".into()
+            } else {
+                "Off — this machine's own play log".into()
             }
         }
         SettingItem::AgroEnabled => {

@@ -7,6 +7,9 @@ use anyhow::Result;
 impl App {
     pub fn bootstrap(&mut self) {
         self.load_artists();
+        // Before anything else needs them: the mixes below and the Discover shelf both read
+        // `stats`, and with centralised statistics on the local file is not where they come from.
+        self.refresh_central_stats();
         self.load_albums();
         self.load_playlists();
         // A fresh install has no play history, so Home's mixes fall back to the
@@ -190,6 +193,7 @@ impl App {
                 self.update_operation_progress("library-sync", fraction, Some(detail))
             }
             LoadEvent::ShareDomain(domain) => self.agro_share_domain = domain,
+            LoadEvent::Stats(stats) => self.stats = stats,
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {
                     state.pending = false;

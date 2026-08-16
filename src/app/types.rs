@@ -198,6 +198,9 @@ pub enum LoadEvent {
     ShareCreated(Result<String, String>),
     /// The share domain a paired Agro server publishes, or `None` if it publishes none.
     ShareDomain(Option<crate::integrations::share_link::ShareDomain>),
+    /// The fleet's listening statistics, when `[agro] central_stats` is on. Same shape as the
+    /// locally computed ones, so nothing downstream can tell which it was handed.
+    Stats(crate::history::Stats),
     /// One sync pass finished: how many files were hashed and uploaded, or why it stopped.
     SyncFinished(Result<SyncSummary, String>),
     /// The server's answer to "what am I missing", ready to offer.

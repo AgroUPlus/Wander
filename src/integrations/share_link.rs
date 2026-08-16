@@ -29,6 +29,36 @@ pub struct ShareDomain {
 }
 
 impl ShareDomain {
+    /// The link to hand the user, minting a short UID via Agro when paired.
+    pub async fn rewrite_async(&self, url: &str, agro: Option<&crate::integrations::agro::AgroClient>) -> String {
+        if self.domain.trim().is_empty() {
+            return url.to_string();
+        }
+        let Some(host) = https_host(url) else {
+            return url.to_string();
+        };
+        if !self.allows(&host) {
+            return url.to_string();
+        }
+        let domain = self.domain.trim().trim_matches('/');
+
+        // When Agro is paired, mint a short UID so all links use clean ?id=<uid>
+        if let Some(agro_client) = agro {
+            if let Ok(uid) = agro_client.create_short_link(url).await {
+                if !uid.trim().is_empty() {
+                    return format!("https://{domain}/listen?id={uid}");
+                }
+            }
+        }
+
+        // Fallback for YouTube links when Agro is not paired
+        if let Some(video_id) = youtube_video_id(url) {
+            return format!("https://{domain}/listen?v={video_id}");
+        }
+
+        format!("https://{domain}/listen?u={}", urlencoding::encode(url))
+    }
+
     /// The link to hand the user: wrapped when it can be, untouched when it cannot.
     pub fn rewrite(&self, url: &str) -> String {
         if self.domain.trim().is_empty() {

@@ -189,14 +189,22 @@ impl App {
         // Resolved here rather than in the task: the domain is a setting, and reading it on the
         // UI thread keeps the async block free of `self`.
         let share_domain = self.share_domain();
+        let agro = self.config.agro.clone();
+        let agro_client = if agro.enabled && !agro.passphrase.trim().is_empty() && !agro.server.trim().is_empty() {
+            Some(crate::integrations::agro::AgroClient::new(
+                agro.server.clone(),
+                agro.username.clone(),
+                agro.passphrase.clone(),
+                agro.device_id.clone(),
+            ))
+        } else {
+            None
+        };
         self.spawn_load(async move {
-            let result = library
-                .create_share(&ids, &description, expires, downloadable)
-                .await
-                // The server's own link when no domain is configured — see `ShareDomain::rewrite`,
-                // which hands anything it cannot carry straight back.
-                .map(|share| share_domain.rewrite(&share.url))
-                .map_err(|err| format!("{err:#}"));
+            let result = match library.create_share(&ids, &description, expires, downloadable).await {
+                Ok(share) => Ok(share_domain.rewrite_async(&share.url, agro_client.as_ref()).await),
+                Err(err) => Err(format!("{err:#}")),
+            };
             Ok(LoadEvent::ShareCreated(result))
         });
     }
