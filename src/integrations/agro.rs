@@ -60,9 +60,21 @@ pub struct HandoffQueueTrack {
     pub artwork_url: Option<String>,
 }
 
-/// The shared namespace for tracks served by the Navidrome both clients point at.
+/// The shared namespace for tracks.
 pub fn namespaced_id(song_id: &str) -> String {
-    format!("navidrome:{}", song_id)
+    if song_id.starts_with("navidrome:")
+        || song_id.starts_with("local:")
+        || song_id.starts_with("online:")
+        || song_id.starts_with("ytm:")
+        || song_id.starts_with("ytmusic:")
+        || song_id.starts_with("archive:")
+        || song_id.starts_with("http://")
+        || song_id.starts_with("https://")
+    {
+        song_id.to_string()
+    } else {
+        format!("navidrome:{}", song_id)
+    }
 }
 
 #[derive(Debug, Clone)]

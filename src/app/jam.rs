@@ -226,35 +226,127 @@ impl App {
             return;
         }
 
-        let wanted_title = now.title.to_lowercase();
-        let wanted_artist = now.artist.to_lowercase();
+        let wanted_title = clean_track_name(&now.title);
+        let wanted_artist = clean_track_name(&now.artist);
+
+        // 1. Match against currently loaded tracks list
         let found = self.tracks.iter().position(|song| {
-            song.title.to_lowercase() == wanted_title
-                && song
+            let s_title = clean_track_name(&song.title);
+            let title_match = s_title == wanted_title
+                || s_title.contains(&wanted_title)
+                || wanted_title.contains(&s_title);
+            let artist_match = wanted_artist.is_empty()
+                || song
                     .artist
                     .as_deref()
-                    .map(|a| a.to_lowercase() == wanted_artist)
-                    .unwrap_or(true)
+                    .map(|a| {
+                        let sa = clean_track_name(a);
+                        sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
+                    })
+                    .unwrap_or(true);
+            title_match && artist_match
         });
 
-        let Some(index) = found else {
-            // Not skipped: the room is still playing it, and skipping ahead is what puts a device
-            // out of step. This one simply sits the track out.
-            self.status_message = Some(format!("You don't have “{}”", now.title));
-            self.jam_playing_track = None;
-            return;
-        };
-
-        self.jam_playing_track = Some(now.track_id.clone());
-        let songs = self.tracks.clone();
-        self.player
-            .send(crate::player::PlayerCommand::PlayNow { songs, index });
-        if now.position_ms > 0 {
+        if let Some(index) = found {
+            self.jam_playing_track = Some(now.track_id.clone());
+            let songs = self.tracks.clone();
             self.player
-                .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
-                    now.position_ms as u64,
-                )));
+                .send(crate::player::PlayerCommand::PlayNow { songs, index });
+            if now.position_ms > 0 {
+                self.player
+                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
+                        now.position_ms as u64,
+                    )));
+            }
+            return;
         }
+
+        // 2. Match against local library index (all local internal sounds and files)
+        if let Some(local_song) = self
+            .library_root
+            .as_ref()
+            .and_then(|root| root.local())
+            .map(|local| local.index())
+            .and_then(|idx| {
+                idx.tracks.iter().find(|t| {
+                    let t_title = clean_track_name(&t.title);
+                    let title_match = t_title == wanted_title
+                        || t_title.contains(&wanted_title)
+                        || wanted_title.contains(&t_title);
+                    let artist_match = wanted_artist.is_empty()
+                        || t.artist
+                            .as_deref()
+                            .map(|a| {
+                                let sa = clean_track_name(a);
+                                sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
+                            })
+                            .unwrap_or(true);
+                    title_match && artist_match
+                }).map(|t| t.to_song())
+            })
+        {
+            self.jam_playing_track = Some(now.track_id.clone());
+            self.player
+                .send(crate::player::PlayerCommand::PlayNow {
+                    songs: vec![local_song],
+                    index: 0,
+                });
+            if now.position_ms > 0 {
+                self.player
+                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
+                        now.position_ms as u64,
+                    )));
+            }
+            return;
+        }
+
+        // 3. Match against album, artist, playlist, favorites or queue songs
+        let queue_songs = self.player.queue.lock().unwrap().songs().to_vec();
+        let other_found = self
+            .album_songs
+            .iter()
+            .chain(self.artist_songs.iter())
+            .chain(self.playlist_songs.iter())
+            .chain(self.favorites.iter())
+            .chain(queue_songs.iter())
+            .find(|song| {
+                let s_title = clean_track_name(&song.title);
+                let title_match = s_title == wanted_title
+                    || s_title.contains(&wanted_title)
+                    || wanted_title.contains(&s_title);
+                let artist_match = wanted_artist.is_empty()
+                    || song
+                        .artist
+                        .as_deref()
+                        .map(|a| {
+                            let sa = clean_track_name(a);
+                            sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
+                        })
+                        .unwrap_or(true);
+                title_match && artist_match
+            })
+            .cloned();
+
+        if let Some(song) = other_found {
+            self.jam_playing_track = Some(now.track_id.clone());
+            self.player
+                .send(crate::player::PlayerCommand::PlayNow {
+                    songs: vec![song],
+                    index: 0,
+                });
+            if now.position_ms > 0 {
+                self.player
+                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
+                        now.position_ms as u64,
+                    )));
+            }
+            return;
+        }
+
+        // Not skipped: the room is still playing it, and skipping ahead is what puts a device
+        // out of step. This one simply sits the track out.
+        self.status_message = Some(format!("You don't have “{}”", now.title));
+        self.jam_playing_track = None;
     }
 
     /// The suggestion under the cursor, if the cursor is on one.
@@ -273,4 +365,26 @@ impl App {
             .get(self.jam_sel)
             .map(|t| t.id.clone())
     }
+}
+
+fn clean_track_name(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let without_ext = if let Some(idx) = lower.rfind('.') {
+        let ext = &lower[idx + 1..];
+        if matches!(ext, "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma" | "alac") {
+            &lower[..idx]
+        } else {
+            &lower
+        }
+    } else {
+        &lower
+    };
+
+    without_ext
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

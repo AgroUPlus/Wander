@@ -265,7 +265,15 @@ impl App {
     /// The song list the focused pane represents, and the selected index in it.
     pub(crate) fn focused_songs(&self) -> (Vec<Song>, usize) {
         match self.focus {
-            Pane::Queue => (Vec::new(), self.queue_sel.index),
+            Pane::Queue => (
+                self.player
+                    .queue
+                    .lock()
+                    .unwrap()
+                    .songs()
+                    .to_vec(),
+                self.queue_sel.index,
+            ),
             Pane::Artists | Pane::ArtistAlbums => (self.artist_songs.clone(), 0),
             Pane::ArtistSongs => (self.artist_songs.clone(), self.artist_song_sel.index),
             Pane::Albums => (self.album_songs.clone(), 0),
@@ -285,14 +293,13 @@ impl App {
         }
     }
 
-    /// Songs the current selection refers to, for enqueueing.
+    /// Songs the current selection refers to, for enqueueing or jam actions.
     pub(crate) fn selected_songs(&self) -> Vec<Song> {
         match self.focus {
             // A container pane queues everything it contains.
             Pane::Artists | Pane::ArtistAlbums | Pane::Albums | Pane::Playlists => {
                 self.focused_songs().0
             }
-            Pane::Queue => Vec::new(),
             _ => {
                 let (songs, index) = self.focused_songs();
                 songs.get(index).cloned().into_iter().collect()
