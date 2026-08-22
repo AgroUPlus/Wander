@@ -518,14 +518,26 @@ fn value_of(app: &App, item: SettingItem) -> String {
             }
         }
         SettingItem::AgroEnabled => {
-            if config.agro.enabled {
-                if config.agro.passphrase.trim().is_empty() {
-                    "Enabled (enter passphrase below)".into()
-                } else {
-                    format!("Enabled — Synced ({})", if config.agro.server.is_empty() { "http://127.0.0.1:8700" } else { &config.agro.server })
-                }
-            } else {
+            // Reports what the server actually said, not merely that a credential is written down.
+            // "Synced" used to appear whenever any credential existed, so a wrong, revoked or
+            // wrongly-pasted one looked identical to a working one and every Agro feature just
+            // quietly did nothing.
+            use crate::app::types::AgroStatus;
+            if !config.agro.enabled {
                 "Disabled".into()
+            } else {
+                match &app.agro_status {
+                    AgroStatus::Connected(username) => format!("Connected as {username}"),
+                    AgroStatus::Checking => "Checking…".into(),
+                    AgroStatus::Refused(why) => format!("Not connected — {why}"),
+                    AgroStatus::Unreachable(why) => format!("Cannot reach the server — {why}"),
+                    AgroStatus::Unknown if config.agro.device_token.trim().is_empty()
+                        && config.agro.passphrase.trim().is_empty() =>
+                    {
+                        "Enabled — no credential yet".into()
+                    }
+                    AgroStatus::Unknown => "Enabled — not checked yet".into(),
+                }
             }
         },
         SettingItem::AgroDeviceName => {
@@ -538,7 +550,7 @@ fn value_of(app: &App, item: SettingItem) -> String {
         }
         SettingItem::AgroServer => {
             if config.agro.server.is_empty() {
-                "http://127.0.0.1:8700 (default)".into()
+                "https://agro.kolbxyz.xyz (default)".into()
             } else {
                 config.agro.server.clone()
             }
@@ -551,7 +563,11 @@ fn value_of(app: &App, item: SettingItem) -> String {
             }
         }
         SettingItem::AgroPassphrase => {
-            if config.agro.passphrase.is_empty() {
+            // A device token counts as being paired. It is the credential the server actually
+            // wants, and after the first login it is the only one this machine keeps.
+            if !config.agro.device_token.trim().is_empty() {
+                "•••••••• (device token)".into()
+            } else if config.agro.passphrase.is_empty() {
                 "(not paired)".into()
             } else {
                 "•••••••• (configured)".into()

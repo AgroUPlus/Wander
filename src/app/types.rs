@@ -23,17 +23,25 @@ pub enum Tab {
     Library,
     Online,
     Operations,
+    /// The shared queue. Only offered when Agro is configured — without a server there is nobody
+    /// to jam with, and a tab that can only say "not paired" is not worth a keystroke.
+    Jam,
+    /// Friends, what they have been into, and the songs they have handed you. Like [`Tab::Jam`],
+    /// only offered when Agro is configured — without a server there is no graph to belong to.
+    Social,
     Settings,
 }
 
 impl Tab {
     #[allow(dead_code)]
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 8] = [
         Tab::Home,
         Tab::Queue,
         Tab::Library,
         Tab::Online,
         Tab::Operations,
+        Tab::Jam,
+        Tab::Social,
         Tab::Settings,
     ];
 
@@ -48,6 +56,10 @@ impl Tab {
         if any_plugin {
             tabs.push(Tab::Online);
         }
+        if config.agro.is_ready() {
+            tabs.push(Tab::Jam);
+            tabs.push(Tab::Social);
+        }
         tabs.push(Tab::Settings);
         tabs
     }
@@ -59,6 +71,8 @@ impl Tab {
             Tab::Library => "Library",
             Tab::Online => "Online",
             Tab::Operations => "Operations",
+            Tab::Jam => "Jam",
+            Tab::Social => "Friends",
             Tab::Settings => "Settings",
         }
     }
@@ -158,12 +172,34 @@ pub enum Pane {
     /// Starred tracks in the Library tab.
     Favorites,
     Lyrics,
+    /// The shared jam queue.
+    Jam,
+    /// The friends tab: feed, inbox and recap in one place.
+    Social,
     Online,
     Operations,
     Settings,
 }
 
 /// Results of async work, applied to the state on the UI thread.
+/// Whether Agro is actually reachable and actually accepts this device's credential.
+///
+/// Kept apart from "is Agro configured", which is all the settings screen used to know. A wrong or
+/// revoked credential leaves every feature silently inert, and a screen that says "Synced"
+/// regardless is worse than one that says nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgroStatus {
+    /// Not checked yet this run.
+    Unknown,
+    Checking,
+    /// Signed in, as this account.
+    Connected(String),
+    /// Reached the server; it refused the credential.
+    Refused(String),
+    /// Never got an answer.
+    Unreachable(String),
+}
+
 pub enum LoadEvent {
     Artists(Vec<Artist>),
     ArtistAlbums {
@@ -198,6 +234,28 @@ pub enum LoadEvent {
     ShareCreated(Result<String, String>),
     /// The share domain a paired Agro server publishes, or `None` if it publishes none.
     ShareDomain(Option<crate::integrations::share_link::ShareDomain>),
+    AgroStatus(AgroStatus),
+    /// The shared queue changed — by us, or by somebody else in the jam.
+    Jam(Option<crate::integrations::agro_jam::Jam>),
+    /// A friend handed this account a song, while the app was open.
+    ///
+    /// Separate from [`LoadEvent::Social`] because it is an interruption rather than a refresh: it
+    /// names who sent what, which is the part worth saying out loud.
+    DropArrived {
+        from: String,
+        title: String,
+        artist: String,
+    },
+    /// Everything the Friends tab shows, read in one pass.
+    ///
+    /// One event rather than four because the tab is drawn as a whole: four events would repaint it
+    /// four times, each with three of its sections a moment out of date.
+    Social {
+        friends: Vec<crate::integrations::agro_social::Friend>,
+        feed: Vec<crate::integrations::agro_social::FeedItem>,
+        inbox: Vec<crate::integrations::agro_social::Drop>,
+        recap: crate::integrations::agro_social::Recap,
+    },
     /// The fleet's listening statistics, when `[agro] central_stats` is on. Same shape as the
     /// locally computed ones, so nothing downstream can tell which it was handed.
     Stats(crate::history::Stats),

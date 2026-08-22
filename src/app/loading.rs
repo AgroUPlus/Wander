@@ -193,6 +193,43 @@ impl App {
                 self.update_operation_progress("library-sync", fraction, Some(detail))
             }
             LoadEvent::ShareDomain(domain) => self.agro_share_domain = domain,
+            LoadEvent::AgroStatus(status) => self.agro_status = status,
+            LoadEvent::DropArrived { from, title, artist } => {
+                self.status_message = Some(if artist.is_empty() {
+                    format!("{from} sent you “{title}”")
+                } else {
+                    format!("{from} sent you “{title}” by {artist}")
+                });
+                // The message names the drop; this fetches the list behind it, so opening the tab
+                // shows the thing that was just announced.
+                self.refresh_social();
+            }
+            LoadEvent::Social { friends, feed, inbox, recap } => {
+                // Both cursors are clamped for the same reason the jam's is: these lists are other
+                // people's, and a friend leaving or a drop being archived elsewhere can shorten
+                // them under a selection that then paints nothing and answers no keys.
+                self.social_sel = self.social_sel.min(friends.len().saturating_sub(1));
+                self.inbox_sel = self.inbox_sel.min(inbox.len().saturating_sub(1));
+                self.friends = friends;
+                self.social_feed = feed;
+                self.inbox = inbox;
+                self.recap = recap;
+            }
+            LoadEvent::Jam(jam) => {
+                let ended = jam.is_none() && self.jam.is_some();
+                // Keep the cursor inside the queue: other people remove tracks too, and a
+                // selection past the end paints nothing and answers no keys.
+                let len = jam.as_ref().map(|j| j.queue.len()).unwrap_or(0);
+                self.jam_sel = self.jam_sel.min(len.saturating_sub(1));
+                self.jam = jam;
+                // The room ending under us — the creator left, or it was wound up — hands the
+                // borrowed queue back rather than leaving this device on a room that is gone.
+                if ended {
+                    self.return_queue_after_jam();
+                } else {
+                    self.follow_jam_now_playing();
+                }
+            }
             LoadEvent::Stats(stats) => self.stats = stats,
             LoadEvent::ShareCreated(result) => {
                 if let Some(Overlay::Share(state)) = self.overlay.as_mut() {

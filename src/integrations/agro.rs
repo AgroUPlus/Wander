@@ -97,16 +97,88 @@ pub fn get_remote_handoff() -> Arc<RwLock<Option<RemoteHandoff>>> {
 
 pub struct AgroClient {
     client: Client,
-    server: String,
-    username: String,
+    pub server: String,
+    pub username: String,
     passphrase: String,
-    device_id: String,
+    pub device_id: String,
+    token: Arc<tokio::sync::RwLock<Option<String>>>,
+}
+
+/// Exchanges an account passphrase for a device token via `/api/v1/login`.
+pub async fn exchange_token(server: &str, username: &str, passphrase: &str, device_id: &str) -> Result<String> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let login_url = format!("{}/api/v1/login", server.trim_end_matches('/'));
+    let body = json!({
+        "username": username.trim(),
+        "passphrase": passphrase.trim(),
+        "label": device_id.trim()
+    });
+
+    let res = client.post(&login_url).json(&body).send().await?;
+    let status = res.status();
+    if status.is_success() {
+        let json_data: serde_json::Value = res.json().await?;
+        if let Some(token) = json_data.get("token").and_then(|t| t.as_str()) {
+            // Every caller's token is remembered here rather than at each call site. There are
+            // three of them — the GraphQL client, the sync client and the reconnecting WebSocket —
+            // and one that forgot would quietly go back to minting a credential per attempt.
+            remember_token(token);
+            return Ok(token.to_string());
+        }
+    }
+    anyhow::bail!("Login exchange failed with status {}", status)
+}
+
+/// The device token, shared by every [`AgroClient`] in the process and kept across runs.
+///
+/// A client is built per operation, so a token cached on the client itself never survives long
+/// enough to be reused — each one bought its own from `/api/v1/login` and left another row in the
+/// server's app-password list. The process-wide cache fixes the repetition within a run; writing
+/// it to the config file fixes it across runs.
+static DEVICE_TOKEN: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// The token to try first: whatever this process last obtained, else what the config file kept.
+pub(crate) fn cached_token() -> Option<String> {
+    if let Ok(guard) = DEVICE_TOKEN.read() {
+        if let Some(token) = guard.as_ref() {
+            return Some(token.clone());
+        }
+    }
+    let stored = crate::config::Config::load()
+        .ok()
+        .map(|config| config.agro.device_token.trim().to_string())
+        .filter(|token| !token.is_empty())?;
+    if let Ok(mut guard) = DEVICE_TOKEN.write() {
+        *guard = Some(stored.clone());
+    }
+    Some(stored)
+}
+
+/// Remembers a freshly minted token, in this process and on disk.
+///
+/// The config is re-read before it is written so this cannot clobber an edit made while the
+/// program was running — only the one field is carried over. A failure to save is not worth
+/// reporting: the token still works for this run, and the next run buys another.
+fn remember_token(token: &str) {
+    if let Ok(mut guard) = DEVICE_TOKEN.write() {
+        *guard = Some(token.to_string());
+    }
+    if let Ok(mut config) = crate::config::Config::load() {
+        if config.agro.device_token != token {
+            config.agro.device_token = token.to_string();
+            let _ = config.save();
+        }
+    }
 }
 
 impl AgroClient {
     pub fn new(server: String, username: String, passphrase: String, device_id: String) -> Self {
         let client = Client::builder()
-            .timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(3))
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -116,7 +188,117 @@ impl AgroClient {
             username,
             passphrase,
             device_id,
+            token: Arc::new(tokio::sync::RwLock::new(cached_token())),
         }
+    }
+
+    /// The credential to present, best first.
+    ///
+    /// The passphrase is the last resort rather than the default: it stopped being a bearer token
+    /// when device tokens arrived, so leading with it means a guaranteed 401 before every first
+    /// request. It is still tried, because a config written by the dashboard's pairing snippet
+    /// puts a device token in that same field.
+    async fn auth_header(&self) -> String {
+        let read = self.token.read().await;
+        if let Some(tok) = read.as_ref() {
+            return format!("Bearer {tok}");
+        }
+        drop(read);
+        format!("Bearer {}", self.passphrase.trim())
+    }
+
+    async fn try_exchange(&self) -> bool {
+        // Nothing to exchange with. Whatever is in `passphrase` is already being sent as a bearer
+        // token, and asking `/api/v1/login` to accept a device token as a passphrase just burns a
+        // request against the rate limiter.
+        if self.passphrase.trim().is_empty() {
+            return false;
+        }
+        let label = self
+            .device_name()
+            .unwrap_or_else(|| self.device_id.trim().to_string());
+        if let Ok(new_tok) = exchange_token(&self.server, &self.username, &self.passphrase, &label).await {
+            remember_token(&new_tok);
+            *self.token.write().await = Some(new_tok);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Asks the server who this device is signed in as.
+    ///
+    /// The only way to find out whether the configured credential actually works. Everything else
+    /// fails quietly — a refused handoff looks exactly like a device that is not playing — so the
+    /// settings screen reported "Synced" purely on the basis that *some* credential was written in
+    /// the config, which is the one thing that was never in doubt.
+    pub async fn verify(&self) -> Result<String> {
+        let answer = self
+            .graphql(&json!({ "query": "{ me { username } }" }))
+            .await?;
+        answer["data"]["me"]["username"]
+            .as_str()
+            .map(|name| name.to_string())
+            .ok_or_else(|| {
+                let refusal = answer["errors"][0]["message"]
+                    .as_str()
+                    .unwrap_or("the server did not say who this device is");
+                anyhow::anyhow!("{refusal}")
+            })
+    }
+
+    /// What this device calls itself in the server's app-password list.
+    ///
+    /// A stable name, so a token that is replaced is recognisable as a replacement rather than as
+    /// another unrelated device.
+    fn device_name(&self) -> Option<String> {
+        crate::config::Config::load()
+            .ok()
+            .and_then(|config| config.agro.device_name)
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+    }
+
+    pub async fn graphql(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
+        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
+        let mut auth = self.auth_header().await;
+
+        let mut res = self
+            .client
+            .post(&url)
+            .header("Authorization", &auth)
+            .json(body)
+            .send()
+            .await?;
+
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+            auth = self.auth_header().await;
+            res = self
+                .client
+                .post(&url)
+                .header("Authorization", &auth)
+                .json(body)
+                .send()
+                .await?;
+        }
+
+        if !res.status().is_success() {
+            anyhow::bail!("Agro server returned status {}", res.status());
+        }
+
+        let json_data: serde_json::Value = res.json().await?;
+        if let Some(errors) = json_data.get("errors").and_then(|e| e.as_array())
+            && !errors.is_empty()
+        {
+            let message = errors
+                .first()
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("unspecified error");
+            anyhow::bail!("Agro error: {message}");
+        }
+
+        Ok(json_data)
     }
 
     pub async fn register_node(&self, device_name: Option<&str>, current_track: Option<&str>) -> Result<Option<String>> {
@@ -139,17 +321,7 @@ impl AgroClient {
             }
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-
-        if res.status().is_success() {
-            let json_data: serde_json::Value = res.json().await?;
+        if let Ok(json_data) = self.graphql(&body).await {
             let petname = json_data
                 .get("data")
                 .and_then(|d| d.get("registerNode"))
@@ -201,15 +373,7 @@ impl AgroClient {
             "variables": variables
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let _ = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await;
-
+        let _ = self.graphql(&body).await;
         Ok(())
     }
 
@@ -229,18 +393,7 @@ impl AgroClient {
                 "source": "navidrome"
             }
         });
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-        if !res.status().is_success() {
-            anyhow::bail!("Agro server returned status {}", res.status());
-        }
-        let json_data: serde_json::Value = res.json().await?;
+        let json_data = self.graphql(&body).await?;
         let uid = json_data
             .get("data")
             .and_then(|d| d.get("createShortLink"))
@@ -271,20 +424,9 @@ impl AgroClient {
             }
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
+        let Ok(json_data) = self.graphql(&body).await else {
             return Ok(None);
-        }
-
-        let json_data: serde_json::Value = res.json().await?;
+        };
         let handoff_opt = json_data.get("data").and_then(|d| d.get("playbackHandoff"));
 
         if let Some(h) = handoff_opt {
@@ -366,24 +508,7 @@ impl AgroClient {
             }
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
-            anyhow::bail!("agro rejected the scrobble batch: {}", res.status());
-        }
-        // A GraphQL error arrives with a 200, so the body has to be looked at too — otherwise a
-        // rejected batch is silently dropped from the outbox.
-        let payload: serde_json::Value = res.json().await?;
-        if payload.get("errors").is_some_and(|e| !e.is_null()) {
-            anyhow::bail!("agro rejected the scrobble batch");
-        }
+        self.graphql(&body).await?;
         Ok(())
     }
 
@@ -413,16 +538,7 @@ impl AgroClient {
             "variables": { "userId": self.username, "period": period }
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-
-        let payload: serde_json::Value = res.json().await?;
+        let payload = self.graphql(&body).await?;
         let stats = payload
             .get("data")
             .and_then(|d| d.get("listeningStats"))
@@ -466,20 +582,9 @@ impl AgroClient {
             "variables": { "userId": self.username }
         });
 
-        let url = format!("{}/graphql", self.server.trim_end_matches('/'));
-        let res = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !res.status().is_success() {
+        let Ok(json_data) = self.graphql(&body).await else {
             return Ok(None);
-        }
-
-        let json_data: serde_json::Value = res.json().await?;
+        };
         let settings = json_data
             .get("data")
             .and_then(|d| d.get("syncedSettings"))
@@ -736,7 +841,10 @@ async fn drain_scrobbles(client: &AgroClient, device_name: &str) {
 
 /// Spawns the lightweight Agro sync background task if enabled in configuration.
 pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
-    if !config.enabled || config.passphrase.trim().is_empty() {
+    // `has_credential`, not `passphrase`: a device paired from a QR keeps a device token and no
+    // passphrase, and testing the passphrase alone made exactly that case look unconfigured — the
+    // whole reporting task returned here and the device never appeared on the server at all.
+    if !config.enabled || !config.has_credential() {
         return Ok(());
     }
 
@@ -884,5 +992,62 @@ mod tests {
         // Last second of a year, and the first of the next.
         assert_eq!(rfc3339(1_735_689_599), "2024-12-31T23:59:59Z");
         assert_eq!(rfc3339(1_735_689_600), "2025-01-01T00:00:00Z");
+    }
+}
+
+#[cfg(test)]
+mod token_reuse_tests {
+    use super::*;
+
+    /// Proves a device buys one credential, not one per operation.
+    ///
+    /// An `AgroClient` is constructed per operation, so a token cached on the client itself was
+    /// thrown away immediately and the next call bought another from `/api/v1/login`. On the
+    /// server that showed up as an app-password list filling with identically-named rows nobody
+    /// could tell apart. This asserts the count on the server, because that is where the symptom
+    /// was visible.
+    ///
+    /// Ignored by default — it needs a real server and an account to spend:
+    ///
+    /// ```text
+    /// AGRO_TEST_URL=http://localhost:8797 AGRO_TEST_USER=beta AGRO_TEST_PASS=… \
+    ///   XDG_CONFIG_HOME=$(mktemp -d) \
+    ///   cargo test repeated_clients_share_one_device_token -- --ignored --nocapture
+    /// ```
+    #[tokio::test]
+    #[ignore]
+    async fn repeated_clients_share_one_device_token() {
+        let (Ok(url), Ok(user), Ok(pass)) = (
+            std::env::var("AGRO_TEST_URL"),
+            std::env::var("AGRO_TEST_USER"),
+            std::env::var("AGRO_TEST_PASS"),
+        ) else {
+            eprintln!("set AGRO_TEST_URL, AGRO_TEST_USER and AGRO_TEST_PASS");
+            return;
+        };
+
+        // Five separate clients, as five separate operations would build them.
+        for _ in 0..5 {
+            let client = AgroClient::new(url.clone(), user.clone(), pass.clone(), "wander-testbox".into());
+            let _ = client.fetch_stats("ALL").await;
+        }
+
+        let listed = AgroClient::new(url, user.clone(), pass, "wander-testbox".into())
+            .graphql(&json!({
+                "query": "query D($u: String!) { appPasswords(userId: $u) { id label } }",
+                "variables": { "u": user }
+            }))
+            .await
+            .expect("listing app passwords");
+
+        let tokens = listed["data"]["appPasswords"]
+            .as_array()
+            .expect("appPasswords array")
+            .len();
+        eprintln!("--- {tokens} credentials on the server ---");
+        assert!(
+            tokens <= 2,
+            "six clients left {tokens} credentials behind; the token is not being reused"
+        );
     }
 }

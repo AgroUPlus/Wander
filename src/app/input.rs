@@ -121,6 +121,154 @@ impl App {
             }
         }
 
+        // The join prompt owns the keyboard while it is open, or typing a code would trigger
+        // every single-letter binding it passes through.
+        if self.jam_join_input.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.jam_join_input = None;
+                    self.status_message = None;
+                }
+                KeyCode::Enter => self.submit_jam_join(),
+                KeyCode::Backspace => {
+                    if let Some(buffer) = self.jam_join_input.as_mut() {
+                        buffer.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(buffer) = self.jam_join_input.as_mut() {
+                        buffer.push(c.to_ascii_uppercase());
+                    }
+                }
+                _ => {}
+            }
+            if let Some(buffer) = self.jam_join_input.as_ref() {
+                self.status_message = Some(format!("Join code: {buffer}"));
+            }
+            return;
+        }
+
+        // The note prompt owns the keyboard for the same reason the join prompt above does: a note
+        // is free text, and every letter in it would otherwise fire a single-letter binding.
+        if self.drop_note_input.is_some() {
+            match key.code {
+                KeyCode::Esc => self.cancel_drop(),
+                KeyCode::Enter => self.confirm_drop(),
+                KeyCode::Backspace => {
+                    if let Some(buffer) = self.drop_note_input.as_mut() {
+                        buffer.pop();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(buffer) = self.drop_note_input.as_mut() {
+                        buffer.push(c);
+                    }
+                }
+                _ => {}
+            }
+            if let Some(buffer) = self.drop_note_input.as_ref() {
+                self.status_message = Some(format!("Note: {buffer}"));
+            }
+            return;
+        }
+
+        // Sending a track to a friend works from any list of songs, exactly like adding to a jam:
+        // the track comes from the focused pane, and the friend from the Friends tab's cursor.
+        if key.code == KeyCode::Char('d')
+            && no_mods
+            && matches!(
+                self.focus,
+                Pane::Tracks
+                    | Pane::Favorites
+                    | Pane::AlbumSongs
+                    | Pane::ArtistSongs
+                    | Pane::PlaylistSongs
+                    | Pane::Queue
+            )
+        {
+            self.prompt_drop_to_selected_friend();
+            return;
+        }
+
+        if self.focus == Pane::Social && no_mods {
+            match key.code {
+                KeyCode::Char('r') => {
+                    self.refresh_social();
+                    return;
+                }
+                // Opening a drop is what marks it read, so this is the same key as "look at it".
+                KeyCode::Enter => {
+                    self.read_selected_drop();
+                    return;
+                }
+                KeyCode::Char('x') => {
+                    self.archive_selected_drop();
+                    return;
+                }
+                KeyCode::Char('p') => {
+                    self.cycle_recap_period();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Adding to the jam works from any list of songs, so the key is bound to the panes that
+        // have one rather than to a single screen. Silent when not in a jam — see the handler.
+        if key.code == KeyCode::Char('a')
+            && no_mods
+            && matches!(
+                self.focus,
+                Pane::Tracks
+                    | Pane::Favorites
+                    | Pane::AlbumSongs
+                    | Pane::ArtistSongs
+                    | Pane::PlaylistSongs
+                    | Pane::Queue
+            )
+        {
+            self.add_selected_to_jam();
+            return;
+        }
+
+        if self.focus == Pane::Jam && no_mods {
+            match key.code {
+                KeyCode::Char('c') => {
+                    self.create_jam();
+                    return;
+                }
+                KeyCode::Char('j') => {
+                    self.prompt_join_jam();
+                    return;
+                }
+                KeyCode::Char('v') => {
+                    self.approve_selected_jam_track();
+                    return;
+                }
+                KeyCode::Char('x') => {
+                    self.remove_selected_jam_track();
+                    return;
+                }
+                KeyCode::Char('m') => {
+                    self.toggle_jam_mode();
+                    return;
+                }
+                KeyCode::Char('s') => {
+                    self.vote_skip_jam_track();
+                    return;
+                }
+                KeyCode::Char('o') => {
+                    self.toggle_jam_visibility();
+                    return;
+                }
+                KeyCode::Char('l') => {
+                    self.leave_jam();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         let Some(action) = self.keymap.resolve(key) else {
             return;
         };
