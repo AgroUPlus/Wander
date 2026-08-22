@@ -10,6 +10,8 @@ pub fn focus_order(tab: Tab, library_mode: LibraryMode, side_queue: bool) -> Vec
         Tab::Queue => vec![Pane::Queue],
         Tab::Library => library_mode.panes().to_vec(),
         Tab::Online => vec![Pane::Online],
+        Tab::Jam => vec![Pane::Jam],
+        Tab::Social => vec![Pane::Social],
         Tab::Operations => vec![Pane::Operations],
         Tab::Settings => vec![Pane::Settings],
     };
@@ -34,6 +36,21 @@ impl App {
             }
             self.tab = tab;
             self.focus = self.panes()[0];
+            // Opening Settings is the moment someone wants to know whether Agro works, so that is
+            // when it gets asked. Checking on a timer would be spending requests on a question
+            // nobody is looking at the answer to.
+            if tab == Tab::Settings {
+                self.refresh_agro_status();
+            }
+            // The jam is other people's too, so it is re-read on arrival rather than trusted.
+            if tab == Tab::Jam {
+                self.refresh_jam();
+            }
+            // Same again, and more so: all four of these surfaces are somebody else's, and any of
+            // them can have been closed to us since the last look.
+            if tab == Tab::Social {
+                self.refresh_social();
+            }
         }
     }
 
@@ -141,6 +158,11 @@ impl App {
             Pane::PlaylistSongs => self.playlist_songs.len(),
             Pane::Tracks => self.tracks.len(),
             Pane::Favorites => self.favorites.len(),
+            // The cursor moves over the suggestions, which are the only rows that answer a key.
+            Pane::Jam => self.jam.as_ref().map(|j| j.proposals.len()).unwrap_or(0),
+            // The friend list is what the cursor moves over: it is the half of the tab that
+            // answers keys, since sending a drop needs somebody chosen.
+            Pane::Social => self.friends.len(),
             Pane::Online => match self.online_source {
                 #[cfg(feature = "nyaa")]
                 OnlineSource::Nyaa => self.nyaa_plugin.results.len(),
@@ -175,6 +197,12 @@ impl App {
             Pane::Tracks => &mut self.track_sel,
             Pane::Favorites => &mut self.favorite_sel,
             Pane::Lyrics => &mut self.lyrics_sel,
+            // The jam queue keeps its own cursor as a plain index: other people mutate this list,
+            // so a `Selection` with a remembered offset would point at a row that had moved.
+            Pane::Jam => &mut self.lyrics_sel,
+            // Same reasoning as the jam: the friend list is somebody else's, so the cursor is a
+            // plain index clamped on every refresh rather than a `Selection` with a stored offset.
+            Pane::Social => &mut self.lyrics_sel,
             Pane::Online => match self.online_source {
                 #[cfg(feature = "nyaa")]
                 OnlineSource::Nyaa => &mut self.nyaa_plugin.selection,
@@ -237,7 +265,15 @@ impl App {
     /// The song list the focused pane represents, and the selected index in it.
     pub(crate) fn focused_songs(&self) -> (Vec<Song>, usize) {
         match self.focus {
-            Pane::Queue => (Vec::new(), self.queue_sel.index),
+            Pane::Queue => (
+                self.player
+                    .queue
+                    .lock()
+                    .unwrap()
+                    .songs()
+                    .to_vec(),
+                self.queue_sel.index,
+            ),
             Pane::Artists | Pane::ArtistAlbums => (self.artist_songs.clone(), 0),
             Pane::ArtistSongs => (self.artist_songs.clone(), self.artist_song_sel.index),
             Pane::Albums => (self.album_songs.clone(), 0),
@@ -247,18 +283,23 @@ impl App {
             Pane::Tracks => (self.tracks.clone(), self.track_sel.index),
             Pane::Favorites => (self.favorites.clone(), self.favorite_sel.index),
             // Nothing selectable: lyrics, settings, home, online & operations track their own state.
-            Pane::Lyrics | Pane::Settings | Pane::Home | Pane::Online | Pane::Operations => (Vec::new(), 0),
+            Pane::Lyrics
+            | Pane::Settings
+            | Pane::Home
+            | Pane::Online
+            | Pane::Operations
+            | Pane::Jam
+            | Pane::Social => (Vec::new(), 0),
         }
     }
 
-    /// Songs the current selection refers to, for enqueueing.
+    /// Songs the current selection refers to, for enqueueing or jam actions.
     pub(crate) fn selected_songs(&self) -> Vec<Song> {
         match self.focus {
             // A container pane queues everything it contains.
             Pane::Artists | Pane::ArtistAlbums | Pane::Albums | Pane::Playlists => {
                 self.focused_songs().0
             }
-            Pane::Queue => Vec::new(),
             _ => {
                 let (songs, index) = self.focused_songs();
                 songs.get(index).cloned().into_iter().collect()
@@ -302,6 +343,13 @@ impl App {
         }
         if self.focus == Pane::Home {
             self.start_mix(self.home_sel.index);
+            return;
+        }
+        if self.focus == Pane::Jam {
+            // Enter accepts a suggestion. There is deliberately no "play this one": the server
+            // decides what the room is on, and picking out of the queue by hand would put this
+            // device out of step with everyone else.
+            self.approve_selected_jam_track();
             return;
         }
         if self.focus == Pane::Queue {

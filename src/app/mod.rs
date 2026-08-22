@@ -16,7 +16,9 @@ use crate::ui::{Hits, Region};
 pub(crate) mod features;
 pub(crate) mod input;
 pub(crate) mod layout;
-pub(crate) mod loading;
+pub(crate) mod jam;
+pub(crate) mod social;
+mod loading;
 pub(crate) mod navigation;
 pub(crate) mod overlays;
 pub(crate) mod settings;
@@ -74,6 +76,38 @@ pub struct App {
     /// `config.share` so the fleet is configured in one place; `None` leaves the local config in
     /// charge, which is what happens with no Agro at all.
     pub agro_share_domain: Option<crate::integrations::share_link::ShareDomain>,
+    /// Whether Agro actually answers and accepts this device's credential.
+    pub agro_status: crate::app::types::AgroStatus,
+    /// The jam this device is in, if any. Held in memory only — a jam is a room, not a document.
+    pub jam: Option<crate::integrations::agro_jam::Jam>,
+    /// Selected row in the jam queue.
+    pub jam_sel: usize,
+    /// Set while typing a join code. `None` means the prompt is closed.
+    pub jam_join_input: Option<String>,
+    /// Whether the jam is currently borrowing this device's queue, so it is given back once.
+    pub jam_queue_borrowed: bool,
+    /// The jam track this device is mirroring, so an unchanged frame does not restart it.
+    pub jam_playing_track: Option<String>,
+
+    /// Accepted friends, with whatever each allows to be seen of their playback.
+    pub friends: Vec<crate::integrations::agro_social::Friend>,
+    /// What friends have been into lately. Empty is the normal state of a server whose users have
+    /// not opened `showActivity`, not a failure.
+    pub social_feed: Vec<crate::integrations::agro_social::FeedItem>,
+    /// Songs friends have handed this account.
+    pub inbox: Vec<crate::integrations::agro_social::Drop>,
+    /// The circle's recap, for whichever period is selected.
+    pub recap: crate::integrations::agro_social::Recap,
+    /// Selected row in the inbox.
+    pub inbox_sel: usize,
+    /// Selected row in the friend list.
+    pub social_sel: usize,
+    /// Which period the recap covers. `WEEK`, `MONTH`, `YEAR` or `ALL`.
+    pub recap_period: String,
+    /// Set while typing a note to send with a drop. `None` means the prompt is closed.
+    pub drop_note_input: Option<String>,
+    /// Who the pending drop is addressed to, chosen before the note is typed.
+    pub drop_target: Option<String>,
 
     pub show_help: bool,
     pub show_queue_pane: bool,
@@ -276,6 +310,21 @@ impl App {
             should_quit: false,
             status_message: None,
             agro_share_domain: None,
+            agro_status: crate::app::types::AgroStatus::Unknown,
+            jam: None,
+            jam_sel: 0,
+            friends: Vec::new(),
+            social_feed: Vec::new(),
+            inbox: Vec::new(),
+            recap: Default::default(),
+            inbox_sel: 0,
+            social_sel: 0,
+            recap_period: "MONTH".to_string(),
+            drop_note_input: None,
+            drop_target: None,
+            jam_join_input: None,
+            jam_queue_borrowed: false,
+            jam_playing_track: None,
             show_help: false,
             show_queue_pane: true,
             show_focus_queue: true,

@@ -41,8 +41,20 @@ pub struct AgroConfig {
     #[serde(alias = "url")]
     pub server: String,
     pub username: String,
-    #[serde(alias = "api_key")]
+    #[serde(alias = "api_key", alias = "token")]
     pub passphrase: String,
+    /// The device credential bought with the passphrase, cached between runs.
+    ///
+    /// Separate from [`passphrase`] because they are different kinds of secret: the passphrase is
+    /// the account, this is one device. Without somewhere to keep it, every `AgroClient` — and one
+    /// is built per operation — had to buy a fresh token from `/api/v1/login`, leaving a row in
+    /// the server's app-password list each time. Tokens piled up faster than anyone could read
+    /// them, all wearing the same label.
+    ///
+    /// Written by the client itself, not by hand. Deleting it costs nothing: the next request
+    /// simply buys another.
+    #[serde(default)]
+    pub device_token: String,
     pub device_id: String,
     pub device_name: Option<String>,
     pub sync_settings: bool,
@@ -112,13 +124,83 @@ fn default_device_id() -> String {
     format!("wander-{}", hostname)
 }
 
+impl AgroConfig {
+    /// Whether this device has anything it can authenticate with.
+    ///
+    /// Either credential will do, and asking about the passphrase alone is wrong: after the first
+    /// login — or after a pairing URI is read — the passphrase is *gone*, deliberately, and the
+    /// device token is the only thing left. Every "is Agro set up?" check has to accept that, or a
+    /// correctly paired device silently reports nothing at all.
+    pub fn has_credential(&self) -> bool {
+        !self.device_token.trim().is_empty() || !self.passphrase.trim().is_empty()
+    }
+
+    /// Ready to talk to a server: switched on, told where, and holding a credential.
+    pub fn is_ready(&self) -> bool {
+        self.enabled && !self.server.trim().is_empty() && self.has_credential()
+    }
+
+    /// Accepts a whole pairing URI where a credential is expected.
+    ///
+    /// What the dashboard puts on screen is `agro://connect?username=…&token=…&server=…` — that is
+    /// the string being copied, and pasting all of it into `passphrase` is the obvious mistake to
+    /// make. It fails silently and identically to a wrong credential: the URI goes out as a bearer
+    /// token, the server refuses it, and nothing says why. Reading the token out of it is cheaper
+    /// than explaining the difference, and the URI carries the username and server too, so a
+    /// single paste is enough to pair.
+    fn absorb_pairing_uri(&mut self) {
+        let raw = self.passphrase.trim().to_string();
+        if !raw.starts_with("agro://") {
+            return;
+        }
+        let Some(query) = raw.split_once('?').map(|(_, q)| q) else {
+            return;
+        };
+        for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+            let decoded = percent_decode(value);
+            if decoded.is_empty() {
+                continue;
+            }
+            match key {
+                "token" => {
+                    self.device_token = decoded;
+                    self.passphrase = String::new();
+                }
+                "username" => self.username = decoded,
+                "server" => self.server = decoded.trim_end_matches('/').to_string(),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Just enough percent-decoding for the one field that carries it, the server URL.
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).trim().to_string()
+}
+
 impl Default for AgroConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            server: "http://127.0.0.1:8700".to_string(),
+            server: "https://agro.kolbxyz.xyz".to_string(),
             username: "alpha".to_string(),
             passphrase: String::new(),
+            device_token: String::new(),
             device_id: default_device_id(),
             device_name: None,
             sync_settings: true,
@@ -439,7 +521,10 @@ impl Config {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading config at {}", path.display()))?;
-        toml::from_str(&text).with_context(|| format!("parsing config at {}", path.display()))
+        let mut config: Self = toml::from_str(&text)
+            .with_context(|| format!("parsing config at {}", path.display()))?;
+        config.agro.absorb_pairing_uri();
+        Ok(config)
     }
 
     /// Save the config to disk.
@@ -473,5 +558,114 @@ impl Config {
             return Ok(self.server.password.clone());
         }
         crate::paths::keyring_password(&self.server.username)
+    }
+}
+
+#[cfg(test)]
+mod pairing_uri_tests {
+    use super::*;
+
+    /// The string on the dashboard is a URI, and that is what gets pasted.
+    #[test]
+    fn a_pairing_uri_is_read_for_its_parts() {
+        let mut agro = AgroConfig {
+            passphrase: "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
+                .to_string(),
+            ..AgroConfig::default()
+        };
+        agro.absorb_pairing_uri();
+
+        assert_eq!(agro.device_token, "abc123");
+        assert_eq!(agro.username, "alpha");
+        assert_eq!(agro.server, "https://agro.example.com");
+        // The URI is not a passphrase and must not be left sitting in the passphrase field, where
+        // it would be sent to /api/v1/login on the next 401.
+        assert!(agro.passphrase.is_empty());
+    }
+
+    /// A URI without a server keeps whatever was already configured.
+    #[test]
+    fn a_uri_without_a_server_leaves_the_configured_one() {
+        let mut agro = AgroConfig {
+            server: "https://agro.example.com".to_string(),
+            passphrase: "agro://connect?username=beta&token=xyz".to_string(),
+            ..AgroConfig::default()
+        };
+        agro.absorb_pairing_uri();
+        assert_eq!(agro.server, "https://agro.example.com");
+        assert_eq!(agro.device_token, "xyz");
+    }
+
+    /// An ordinary passphrase is left exactly as it is.
+    #[test]
+    fn a_real_passphrase_is_untouched() {
+        let mut agro = AgroConfig {
+            passphrase: "sonar-ocean-glacier-eagle".to_string(),
+            ..AgroConfig::default()
+        };
+        agro.absorb_pairing_uri();
+        assert_eq!(agro.passphrase, "sonar-ocean-glacier-eagle");
+        assert!(agro.device_token.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    /// A device paired from a QR has a token and no passphrase, and that is fully configured.
+    ///
+    /// Every "is Agro set up?" check used to ask about the passphrase alone. Reading a pairing URI
+    /// moves the token out of that field, so a correctly paired device answered "no credential"
+    /// everywhere and its whole reporting task refused to start.
+    #[test]
+    fn a_device_token_alone_counts_as_paired() {
+        let agro = AgroConfig {
+            enabled: true,
+            server: "https://agro.example.com".into(),
+            passphrase: String::new(),
+            device_token: "a-device-token".into(),
+            ..AgroConfig::default()
+        };
+        assert!(agro.has_credential(), "a device token is a credential");
+        assert!(agro.is_ready(), "a paired device was treated as unconfigured");
+    }
+
+    #[test]
+    fn a_passphrase_alone_still_counts() {
+        let agro = AgroConfig {
+            enabled: true,
+            server: "https://agro.example.com".into(),
+            passphrase: "four-word-pass-phrase".into(),
+            device_token: String::new(),
+            ..AgroConfig::default()
+        };
+        assert!(agro.is_ready());
+    }
+
+    #[test]
+    fn nothing_configured_is_not_ready() {
+        let agro = AgroConfig {
+            enabled: true,
+            server: "https://agro.example.com".into(),
+            passphrase: String::new(),
+            device_token: String::new(),
+            ..AgroConfig::default()
+        };
+        assert!(!agro.has_credential());
+        assert!(!agro.is_ready());
+    }
+
+    /// Reading a pairing URI must leave the config in a state the rest of the app accepts.
+    #[test]
+    fn a_pairing_uri_leaves_a_ready_config() {
+        let mut agro = AgroConfig {
+            enabled: true,
+            passphrase: "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
+                .into(),
+            ..AgroConfig::default()
+        };
+        agro.absorb_pairing_uri();
+        assert!(agro.is_ready(), "pairing from a URI produced a config nothing would use");
     }
 }

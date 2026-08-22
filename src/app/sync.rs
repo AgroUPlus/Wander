@@ -23,7 +23,7 @@ impl App {
     /// Whether Agro is paired and sync is configured at all.
     fn sync_client(&self) -> Option<SyncClient> {
         let agro = &self.config.agro;
-        if !agro.enabled || agro.passphrase.trim().is_empty() || agro.server.trim().is_empty() {
+        if !agro.is_ready() {
             return None;
         }
         SyncClient::new(&agro.server, &agro.username, &agro.passphrase, &agro.device_id).ok()
@@ -50,7 +50,7 @@ impl App {
     /// convenience Agro may offer, never something sharing depends on.
     pub fn refresh_share_domain(&mut self) {
         let agro = self.config.agro.clone();
-        if !agro.enabled || agro.passphrase.trim().is_empty() || agro.server.trim().is_empty() {
+        if !agro.is_ready() {
             self.agro_share_domain = None;
             return;
         }
@@ -68,12 +68,55 @@ impl App {
         });
     }
 
+    /// Asks Agro who this device is, and records the answer for the settings screen.
+    ///
+    /// Cheap and worth doing on demand: until something actually calls the server, "configured"
+    /// and "working" are indistinguishable, and they differ every time a credential is wrong,
+    /// revoked, or pasted in the wrong form.
+    pub fn refresh_agro_status(&mut self) {
+        let agro = self.config.agro.clone();
+        if !agro.enabled || agro.server.trim().is_empty() {
+            self.agro_status = crate::app::types::AgroStatus::Unknown;
+            return;
+        }
+        if !agro.has_credential() {
+            self.agro_status =
+                crate::app::types::AgroStatus::Refused("no credential configured".into());
+            return;
+        }
+
+        self.agro_status = crate::app::types::AgroStatus::Checking;
+        let loads = self.loads.clone();
+        tokio::spawn(async move {
+            let client = crate::integrations::agro::AgroClient::new(
+                agro.server.clone(),
+                agro.username.clone(),
+                agro.passphrase.clone(),
+                agro.device_id.clone(),
+            );
+            let status = match client.verify().await {
+                Ok(username) => crate::app::types::AgroStatus::Connected(username),
+                Err(err) => {
+                    // A refusal and an unreachable host need different words: one is a credential
+                    // to fix, the other is a server to wait for.
+                    let text = err.to_string();
+                    if text.contains("Unauthorized") || text.contains("Forbidden") || text.contains("not active") {
+                        crate::app::types::AgroStatus::Refused(text)
+                    } else {
+                        crate::app::types::AgroStatus::Unreachable(text)
+                    }
+                }
+            };
+            let _ = loads.send(crate::app::types::LoadEvent::AgroStatus(status));
+        });
+    }
+
     /// Whether the Home tab's statistics come from Agro rather than this machine's play log.
     pub(crate) fn central_stats(&self) -> bool {
         let agro = &self.config.agro;
         agro.enabled
             && agro.central_stats
-            && !agro.passphrase.trim().is_empty()
+            && agro.has_credential()
             && !agro.server.trim().is_empty()
     }
 
@@ -353,7 +396,7 @@ impl App {
     /// animating, so a paused, idle player would never wake up to notice.
     pub fn start_live_sync(&mut self) {
         let agro = &self.config.agro;
-        if !agro.enabled || agro.passphrase.trim().is_empty() || agro.server.trim().is_empty() {
+        if !agro.is_ready() {
             return;
         }
         // Nothing can be offered if this machine never says what it holds.
@@ -365,7 +408,7 @@ impl App {
         };
 
         let mut messages =
-            crate::integrations::agro_ws::spawn(&agro.server, &agro.passphrase, &agro.device_id);
+            crate::integrations::agro_ws::spawn(&agro.server, &agro.passphrase, &agro.device_id, Some(&agro.username));
         let loads = self.loads.clone();
 
         tokio::spawn(async move {
@@ -378,6 +421,26 @@ impl App {
                         let missing = client.missing_here(OFFER_LIMIT).await.unwrap_or_default();
                         if !missing.is_empty() {
                             let _ = loads.send(LoadEvent::SyncOffer(missing));
+                        }
+                    }
+                    // Somebody else changed the shared queue. A jam that only updates when you
+                    // reopen the tab is not shared, so this is re-read as it happens.
+                    // Both are answered the same way: re-read the jam, which carries the room's
+                    // current track as well as its queue. Separate in the protocol because the
+                    // now-playing frame is the one that must not wait behind anything.
+                    // Said out loud, then the inbox re-read. The frame names the track so the
+                    // message can, but it is news about one drop rather than the whole inbox —
+                    // acting on it alone would leave the list behind.
+                    LiveMessage::TrackDrop { from, title, artist } => {
+                        let _ = loads.send(LoadEvent::DropArrived { from, title, artist });
+                    }
+                    LiveMessage::JamUpdated | LiveMessage::JamNowPlaying => {
+                        // The jam lives on the GraphQL client, not the sync client — different
+                        // surface, same server.
+                        if let Some(agro) = crate::integrations::agro::ACTIVE_CLIENT.get() {
+                            if let Ok(jam) = agro.jam().await {
+                                let _ = loads.send(LoadEvent::Jam(jam));
+                            }
                         }
                     }
                 }

@@ -2,6 +2,8 @@ pub mod cover;
 pub mod glyphs;
 pub mod help;
 pub mod home;
+pub mod jam;
+pub mod social;
 pub mod library;
 pub mod lyrics;
 pub mod operations;
@@ -375,6 +377,8 @@ fn draw_body(
         Tab::Home => home::draw(frame, content, app, theme, hits),
         Tab::Queue => queue::draw(frame, content, app, theme, hits, Pane::Queue, true),
         Tab::Library => library::draw_library(frame, content, app, theme, hits),
+        Tab::Social => social::draw(frame, content, app, theme, hits),
+        Tab::Jam => jam::draw(frame, content, app, theme, hits),
         Tab::Online => match app.online_source {
             #[cfg(feature = "nyaa")]
             crate::app::OnlineSource::Nyaa => {

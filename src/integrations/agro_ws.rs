@@ -29,6 +29,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// What the server told us, reduced to the parts this client acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiveMessage {
+    /// Somebody suggested, approved or removed something in the jam.
+    JamUpdated,
+    /// The room moved to a new track. Decided by the server, so this is an instruction.
+    JamNowPlaying,
     /// This device is missing things another device has.
     SyncOffer {
         count: usize,
@@ -36,6 +40,16 @@ pub enum LiveMessage {
     },
     /// The library changed. Worth re-checking what we are missing.
     LibraryUpdated,
+    /// A friend handed this account a song.
+    ///
+    /// Carries the description rather than only an id, so the notification can name the track
+    /// without a round trip. The inbox is still re-read afterwards: this frame is news about one
+    /// drop, not a statement about the whole inbox.
+    TrackDrop {
+        from: String,
+        title: String,
+        artist: String,
+    },
 }
 
 /// Agro's envelope. `msg_type` is the discriminator; everything else rides in `payload`.
@@ -59,24 +73,38 @@ struct OfferPayload {
 ///
 /// `token` goes in the query string rather than a header because a WebSocket handshake cannot
 /// carry custom headers in every client, and Agro accepts `?token=` for exactly that reason.
-pub fn spawn(server: &str, token: &str, device_id: &str) -> UnboundedReceiver<LiveMessage> {
+pub fn spawn(server: &str, token_or_pass: &str, device_id: &str, username: Option<&str>) -> UnboundedReceiver<LiveMessage> {
     let (tx, rx) = mpsc::unbounded_channel();
-    let Some(url) = socket_url(server, token, device_id) else {
-        // An unusable server address is not worth a reconnect loop; the channel simply stays quiet
-        // and the app falls back to polling, exactly as it did before.
-        return rx;
-    };
+    let server = server.to_string();
+    let token_or_pass = token_or_pass.to_string();
+    let device_id = device_id.to_string();
+    let username = username.map(|s| s.to_string());
 
     tokio::spawn(async move {
+        // A reconnect loop that exchanges on every failure mints a credential per failed attempt,
+        // and a server that is simply down fails a great many times. Start from whatever token the
+        // process already has.
+        let mut active_token =
+            crate::integrations::agro::cached_token().unwrap_or_else(|| token_or_pass.clone());
         let mut backoff = BASE_BACKOFF;
         loop {
-            // Failures are deliberately silent. This is a TUI — stderr is the screen — and a
-            // dropped socket is not something the user can act on: the loop below reconnects, and
-            // sync still works by polling in the meantime.
-            if listen(&url, &tx).await.is_ok() {
+            let url = socket_url(&server, &active_token, &device_id);
+            let ok = if let Some(ref u) = url {
+                listen(u, &tx).await.is_ok()
+            } else {
+                false
+            };
+
+            if ok {
                 // A clean end still means reconnecting, but without punishing the next attempt.
                 backoff = BASE_BACKOFF;
+            } else if let Some(ref u) = username {
+                // If connecting failed, attempt to exchange passphrase for a device token
+                if let Ok(new_tok) = crate::integrations::agro::exchange_token(&server, u, &token_or_pass, &device_id).await {
+                    active_token = new_tok;
+                }
             }
+
             if tx.is_closed() {
                 return;
             }
@@ -126,6 +154,13 @@ fn parse(text: &str) -> Option<LiveMessage> {
             })
         }
         "LIBRARY_UPDATED" => Some(LiveMessage::LibraryUpdated),
+        "TRACK_DROP" => Some(LiveMessage::TrackDrop {
+            from: envelope.payload["from"].as_str().unwrap_or("someone").to_string(),
+            title: envelope.payload["trackTitle"].as_str().unwrap_or_default().to_string(),
+            artist: envelope.payload["artistName"].as_str().unwrap_or_default().to_string(),
+        }),
+        "JAM_UPDATED" => Some(LiveMessage::JamUpdated),
+        "JAM_NOW_PLAYING" => Some(LiveMessage::JamNowPlaying),
         // HANDOFF, NODE_UPDATE and SETTINGS_SYNC are someone else's business today. Ignoring them
         // by name rather than by accident means adding one later is a single arm.
         _ => None,
@@ -209,7 +244,7 @@ mod tests {
         };
         let device = std::env::var("AGRO_TEST_DEVICE").unwrap_or_else(|_| "wander-testbox".into());
 
-        let mut rx = spawn(&url, &token, &device);
+        let mut rx = spawn(&url, &token, &device, None);
         eprintln!("listening as {device}; upload something from another device…");
 
         // Collects for a while rather than returning on the first frame: an album should produce
@@ -222,6 +257,8 @@ mod tests {
             match message {
                 LiveMessage::SyncOffer { .. } => offers += 1,
                 LiveMessage::LibraryUpdated => updates += 1,
+                LiveMessage::JamUpdated | LiveMessage::JamNowPlaying => {}
+                LiveMessage::TrackDrop { .. } => {}
             }
         }
         eprintln!("--- {updates} library updates, {offers} sync offers ---");
@@ -241,6 +278,26 @@ mod tests {
         assert_eq!(
             parse(r#"{"msg_type":"LIBRARY_UPDATED","payload":{}}"#),
             Some(LiveMessage::LibraryUpdated)
+        );
+        // A drop names who sent what. A frame missing the sender is still a drop — the inbox is
+        // re-read either way, and refusing to parse it would lose the only notice we get.
+        assert_eq!(
+            parse(
+                r#"{"msg_type":"TRACK_DROP","payload":{"from":"beta","trackTitle":"Xtal","artistName":"Aphex Twin"}}"#
+            ),
+            Some(LiveMessage::TrackDrop {
+                from: "beta".into(),
+                title: "Xtal".into(),
+                artist: "Aphex Twin".into(),
+            })
+        );
+        assert_eq!(
+            parse(r#"{"msg_type":"TRACK_DROP","payload":{}}"#),
+            Some(LiveMessage::TrackDrop {
+                from: "someone".into(),
+                title: String::new(),
+                artist: String::new(),
+            })
         );
         assert_eq!(parse(r#"{"msg_type":"HANDOFF","payload":{}}"#), None);
         assert_eq!(parse("not json"), None);

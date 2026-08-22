@@ -90,6 +90,7 @@ pub struct SyncClient {
     passphrase: String,
     username: String,
     device_id: String,
+    token: std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
 }
 
 impl SyncClient {
@@ -104,7 +105,28 @@ impl SyncClient {
             passphrase: passphrase.to_string(),
             username: username.to_string(),
             device_id: device_id.to_string(),
+            token: std::sync::Arc::new(tokio::sync::RwLock::new(
+                crate::integrations::agro::cached_token(),
+            )),
         })
+    }
+
+    async fn auth_header(&self) -> String {
+        let read = self.token.read().await;
+        if let Some(tok) = read.as_ref() {
+            return format!("Bearer {tok}");
+        }
+        drop(read);
+        format!("Bearer {}", self.passphrase.trim())
+    }
+
+    async fn try_exchange(&self) -> bool {
+        if let Ok(new_tok) = crate::integrations::agro::exchange_token(&self.server, &self.username, &self.passphrase, &self.device_id).await {
+            *self.token.write().await = Some(new_tok);
+            true
+        } else {
+            false
+        }
     }
 
     // ── Metadata ────────────────────────────────────────────────────────────────────────────
@@ -229,14 +251,28 @@ impl SyncClient {
     }
 
     async fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
-        let response = self
+        let url = format!("{}/graphql", self.server);
+        let mut auth = self.auth_header().await;
+        let mut response = self
             .http
-            .post(format!("{}/graphql", self.server))
-            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .post(&url)
+            .header("Authorization", &auth)
             .json(&json!({ "query": query, "variables": variables }))
             .send()
             .await
             .context("reaching the Agro server")?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+            auth = self.auth_header().await;
+            response = self
+                .http
+                .post(&url)
+                .header("Authorization", &auth)
+                .json(&json!({ "query": query, "variables": variables }))
+                .send()
+                .await
+                .context("reaching the Agro server")?;
+        }
 
         if !response.status().is_success() {
             return Err(anyhow!("Agro refused the request ({})", response.status()));
@@ -267,31 +303,47 @@ impl SyncClient {
             .as_ref()
             .ok_or_else(|| anyhow!("\"{}\" has not been hashed yet", track.title))?;
 
-        let begin = self
+        let upload_url = format!("{}/api/v1/library/upload", self.server);
+        let mut auth = self.auth_header().await;
+        let body_json = json!({
+            "deviceId": self.device_id,
+            "contentHash": hash,
+            "sizeBytes": track.size as i64,
+            "title": track.title,
+            "artist": track.artist.clone().unwrap_or_else(|| "Unknown Artist".into()),
+            "album": track.album,
+            "albumArtist": track.album_artist,
+            "trackNo": track.track,
+            "discNo": track.disc,
+            "year": track.year,
+            "genre": track.genre,
+            "durationMs": track.duration as i64 * 1000,
+            "format": track.suffix,
+            "bitrateKbps": track.bit_rate,
+            "localRef": track.path.to_string_lossy(),
+            "extension": track.suffix,
+        });
+
+        let mut begin = self
             .http
-            .post(format!("{}/api/v1/library/upload", self.server))
-            .header("Authorization", format!("Bearer {}", self.passphrase))
-            .json(&json!({
-                "deviceId": self.device_id,
-                "contentHash": hash,
-                "sizeBytes": track.size as i64,
-                "title": track.title,
-                "artist": track.artist.clone().unwrap_or_else(|| "Unknown Artist".into()),
-                "album": track.album,
-                "albumArtist": track.album_artist,
-                "trackNo": track.track,
-                "discNo": track.disc,
-                "year": track.year,
-                "genre": track.genre,
-                "durationMs": track.duration as i64 * 1000,
-                "format": track.suffix,
-                "bitrateKbps": track.bit_rate,
-                "localRef": track.path.to_string_lossy(),
-                "extension": track.suffix,
-            }))
+            .post(&upload_url)
+            .header("Authorization", &auth)
+            .json(&body_json)
             .send()
             .await
             .context("starting the upload")?;
+
+        if begin.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+            auth = self.auth_header().await;
+            begin = self
+                .http
+                .post(&upload_url)
+                .header("Authorization", &auth)
+                .json(&body_json)
+                .send()
+                .await
+                .context("starting the upload")?;
+        }
 
         if !begin.status().is_success() {
             return Err(anyhow!("the server refused the upload ({})", begin.status()));
@@ -308,24 +360,22 @@ impl SyncClient {
 
         let upload_id = begin
             .get("uploadId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("the server sent no upload id"))?;
-        let offset = begin.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| anyhow!("missing uploadId in server reply"))?;
+        let offset = begin
+            .get("received")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
 
-        self.send_bytes(upload_id, &track.path, offset, track.size)
-            .await
+        self.upload_part(upload_id, &track.path, track.size, offset).await
     }
 
-    /// Streams the file from disk into the request body.
-    ///
-    /// `Body::wrap_stream` over a chunked file reader rather than reading it into a `Vec`: memory
-    /// stays flat whatever the file size, which is the same property the server side has.
-    async fn send_bytes(
+    async fn upload_part(
         &self,
         upload_id: &str,
         path: &Path,
-        offset: u64,
         size: u64,
+        offset: u64,
     ) -> Result<UploadOutcome> {
         use tokio::io::AsyncSeekExt;
         use tokio_util::io::ReaderStream;
@@ -340,13 +390,14 @@ impl SyncClient {
                 .context("seeking to the resume point")?;
         }
 
+        let auth = self.auth_header().await;
         let response = self
             .http
             .put(format!(
                 "{}/api/v1/library/upload/{upload_id}",
                 self.server
             ))
-            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .header("Authorization", &auth)
             .header("x-agro-offset", offset.to_string())
             .header("Content-Type", "application/octet-stream")
             .header("Content-Length", (size.saturating_sub(offset)).to_string())
@@ -377,16 +428,26 @@ impl SyncClient {
     /// The hash is re-checked against what arrived. A corrupted transfer that kept its name would
     /// be indistinguishable from the real thing forever after.
     pub async fn fetch(&self, track: &MissingTrack, dir: &Path) -> Result<std::path::PathBuf> {
-        let response = self
+        let fetch_url = format!("{}/api/v1/library/fetch/{}", self.server, track.content_hash);
+        let mut auth = self.auth_header().await;
+        let mut response = self
             .http
-            .get(format!(
-                "{}/api/v1/library/fetch/{}",
-                self.server, track.content_hash
-            ))
-            .header("Authorization", format!("Bearer {}", self.passphrase))
+            .get(&fetch_url)
+            .header("Authorization", &auth)
             .send()
             .await
             .context("asking the server for the file")?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+            auth = self.auth_header().await;
+            response = self
+                .http
+                .get(&fetch_url)
+                .header("Authorization", &auth)
+                .send()
+                .await
+                .context("asking the server for the file")?;
+        }
 
         if !response.status().is_success() {
             return Err(anyhow!(

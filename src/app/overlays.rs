@@ -190,7 +190,7 @@ impl App {
         // UI thread keeps the async block free of `self`.
         let share_domain = self.share_domain();
         let agro = self.config.agro.clone();
-        let agro_client = if agro.enabled && !agro.passphrase.trim().is_empty() && !agro.server.trim().is_empty() {
+        let agro_client = if agro.is_ready() {
             Some(crate::integrations::agro::AgroClient::new(
                 agro.server.clone(),
                 agro.username.clone(),
