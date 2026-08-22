@@ -465,24 +465,36 @@ async fn run_pass(
     };
 
     // ── Hash ────────────────────────────────────────────────────────────────────────────────
-    // On the blocking pool: this reads whole files and would stall the runtime otherwise.
-    let index = local.index();
-    let unhashed: Vec<_> = index
-        .tracks
-        .iter()
-        .filter(|t| t.content_hash.is_none())
-        .take(config.hash_batch)
-        .map(|t| t.path.clone())
-        .collect();
-    summary.remaining = index
-        .tracks
-        .iter()
-        .filter(|t| t.content_hash.is_none())
-        .count()
-        .saturating_sub(unhashed.len());
+    // Loop in batches until all unhashed tracks are hashed, updating progress and saving after each batch.
+    let total_to_hash = local.index().tracks.iter().filter(|t| t.content_hash.is_none()).count();
+    let mut total_hashed_so_far = 0usize;
 
-    if !unhashed.is_empty() {
-        progress(0.0, format!("Hashing {} files…", unhashed.len()));
+    while total_hashed_so_far < total_to_hash {
+        let index = local.index();
+        let unhashed: Vec<_> = index
+            .tracks
+            .iter()
+            .filter(|t| t.content_hash.is_none())
+            .take(config.hash_batch.max(1))
+            .map(|t| t.path.clone())
+            .collect();
+
+        if unhashed.is_empty() {
+            break;
+        }
+
+        let batch_len = unhashed.len();
+        let remaining = total_to_hash.saturating_sub(total_hashed_so_far);
+        let fraction = if total_to_hash > 0 {
+            0.3 * (total_hashed_so_far as f32 / total_to_hash as f32)
+        } else {
+            0.0
+        };
+        progress(
+            fraction,
+            format!("Hashing {} files ({} remaining)…", batch_len, remaining),
+        );
+
         let hashed = tokio::task::spawn_blocking(move || {
             unhashed
                 .into_iter()
@@ -491,11 +503,15 @@ async fn run_pass(
         })
         .await?;
 
-        summary.hashed = hashed.len();
+        if hashed.is_empty() {
+            // Failed to hash any file in the batch (e.g. unreadable/deleted files)
+            break;
+        }
 
-        // Fold the hashes back into the index and persist, so this is never redone.
-        // `index()` returns an Arc, so this works on an owned clone and swaps the whole thing
-        // back in — the same copy-on-write the scanner uses.
+        let hashed_count = hashed.len();
+        summary.hashed += hashed_count;
+        total_hashed_so_far += hashed_count;
+
         let mut index = (*local.index()).clone();
         for (path, hash) in hashed {
             if let Some(track) = index.tracks.iter_mut().find(|t| t.path == path) {
@@ -504,7 +520,19 @@ async fn run_pass(
         }
         let _ = index.save();
         local.set_index(index);
+
+        if hashed_count < batch_len {
+            // Some files in the batch could not be read; stop to avoid an infinite loop
+            break;
+        }
     }
+
+    summary.remaining = local
+        .index()
+        .tracks
+        .iter()
+        .filter(|t| t.content_hash.is_none())
+        .count();
 
     // ── Report ──────────────────────────────────────────────────────────────────────────────
     let index = local.index();
@@ -515,26 +543,29 @@ async fn run_pass(
         .collect();
 
     if config.report_holdings && !hashed.is_empty() {
-        progress(0.3, format!("Reporting {} tracks…", hashed.len()));
+        progress(0.35, format!("Reporting {} tracks to Agro…", hashed.len()));
         client.report_holdings(&hashed).await?;
     }
 
     // ── Upload ──────────────────────────────────────────────────────────────────────────────
-    if config.enabled {
-        let batch: Vec<_> = hashed.into_iter().take(config.upload_batch).collect();
-        let total = batch.len().max(1) as f32;
-        for (done, track) in batch.into_iter().enumerate() {
-            // Named rather than counted: "Sending Limerence" says what is taking the time in a way
-            // that "12 of 25" does not.
+    if config.enabled && !hashed.is_empty() {
+        let total_tracks = hashed.len();
+        let max_uploads = config.upload_batch.max(1);
+
+        for (idx, track) in hashed.into_iter().enumerate() {
+            if summary.uploaded >= max_uploads {
+                break;
+            }
+
+            let fraction = 0.35 + 0.65 * (idx as f32 / total_tracks as f32);
             progress(
-                0.3 + 0.7 * (done as f32 / total),
-                format!("Sending {}", track.title),
+                fraction,
+                format!("Checking / sending: {}", track.title),
             );
+
             match client.upload(track).await {
                 Ok(UploadOutcome::Uploaded) => summary.uploaded += 1,
                 Ok(UploadOutcome::AlreadyPresent) => summary.already_present += 1,
-                // Left as-is: the next pass re-declares it and the server hands back an offset, so
-                // the transfer continues rather than starting over.
                 Ok(UploadOutcome::Partial { .. }) => {}
                 Err(error) => return Err(error),
             }
