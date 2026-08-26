@@ -98,6 +98,47 @@ pub struct SyncedSettings {
     pub stream_format: String,
 }
 
+/// Tells a session that is still happening from the last one that did.
+///
+/// The server keeps whatever a device reported last and goes on keeping it after that device is
+/// closed, killed or carried out of range — none of which sends a final "stopped". So `is_playing`
+/// alone would leave a phone that died mid-track looking like it is still playing it tomorrow.
+///
+/// Staleness is judged by the position failing to advance rather than by the server's timestamp,
+/// deliberately: a playing track moves its own clock forward, which is true regardless of whether
+/// two devices agree about what time it is. Comparing a remote timestamp against this machine's
+/// clock would make the feature depend on both being right.
+#[derive(Default)]
+struct RemoteFreshness {
+    seen: Option<(String, i64)>,
+    unchanged_since: Option<std::time::Instant>,
+}
+
+impl RemoteFreshness {
+    /// Records what the server just said and answers whether it still counts as live.
+    fn accept(&mut self, handoff: &RemoteHandoff) -> bool {
+        let now = (handoff.track_uri.clone(), handoff.position_ms);
+        if self.seen.as_ref() != Some(&now) {
+            self.seen = Some(now);
+            self.unchanged_since = None;
+            return true;
+        }
+        // The window is generous next to the sender's ten-second heartbeat, because the cost of
+        // being wrong is asymmetric: a few seconds of staleness is invisible, while dropping a
+        // live session over one slow heartbeat makes the display flicker.
+        let since = *self.unchanged_since.get_or_insert_with(std::time::Instant::now);
+        since.elapsed() < Duration::from_secs(HANDOFF_STALE_SECS)
+    }
+
+    fn forget(&mut self) {
+        self.seen = None;
+        self.unchanged_since = None;
+    }
+}
+
+/// How long a position may sit still before the sender is presumed gone.
+const HANDOFF_STALE_SECS: u64 = 45;
+
 pub static ACTIVE_REMOTE_HANDOFF: std::sync::OnceLock<Arc<RwLock<Option<RemoteHandoff>>>> =
     std::sync::OnceLock::new();
 
@@ -888,6 +929,7 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
         let mut last_paused = true;
         let mut last_update_time = std::time::Instant::now();
         let mut check_remote_tick = 0u64;
+        let mut remote_freshness = RemoteFreshness::default();
         let mut scrobble_tick = 0u64;
 
         loop {
@@ -956,13 +998,18 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                 check_remote_tick += 1;
                 if check_remote_tick % 3 == 0 {
                     if let Ok(Some(remote)) = client.fetch_latest_handoff().await {
-                        if remote.device_id != client.device_id && remote.is_playing {
-                            let mut store = remote_handoff_store.write().await;
-                            *store = Some(remote);
-                        } else {
-                            let mut store = remote_handoff_store.write().await;
-                            *store = None;
+                        let live = remote.device_id != client.device_id
+                            && remote.is_playing
+                            && remote_freshness.accept(&remote);
+                        if !live {
+                            remote_freshness.forget();
                         }
+                        let mut store = remote_handoff_store.write().await;
+                        *store = if live { Some(remote) } else { None };
+                    } else {
+                        remote_freshness.forget();
+                        let mut store = remote_handoff_store.write().await;
+                        *store = None;
                     }
                 }
             }

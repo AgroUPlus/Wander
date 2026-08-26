@@ -88,6 +88,24 @@ struct Published {
     elapsed_secs: u64,
 }
 
+/// What the presence is currently about.
+///
+/// Rich Presence is a local IPC socket to the Discord desktop client, so it can only ever be set
+/// by a program running beside it — there is no server-side way to set a user's activity, and the
+/// one API that looks like it is a bot setting its *own*. That is why this cannot live in Agro.
+///
+/// It does not have to. Agro already relays what every device is playing, so when Wander itself is
+/// idle it can publish the fleet's current track instead: the phone tells Agro, Agro tells this
+/// process, and this process tells Discord. Wanda gets Rich Presence without ever speaking to
+/// Discord, which is the only way it could — Discord's Android app exposes no IPC socket at all.
+enum Source {
+    /// This machine is playing. Always wins: whatever is in your ears here is the honest answer.
+    Local(Box<crate::subsonic::models::Song>),
+    /// Nothing is playing here and a paired device is. Carries no artwork by design — see
+    /// [`Presence::art_url`].
+    Remote(crate::integrations::agro::RemoteHandoff),
+}
+
 struct Presence {
     player: PlayerHandle,
     library: Arc<dyn Library>,
@@ -148,17 +166,44 @@ impl Presence {
             tokio::time::sleep(POLL).await;
 
             let status = self.player.status();
-            let Some(song) = status.current.clone() else {
+            let source = match status.current.clone() {
+                Some(song) => Some(Source::Local(Box::new(song))),
+                // Only consulted when nothing is playing here. The daemon leaves this set only
+                // while another device is genuinely mid-track — see `RemoteFreshness` — so an
+                // empty store means nobody in the fleet is listening, not that we failed to ask.
+                None => crate::integrations::agro::get_remote_handoff()
+                    .read()
+                    .await
+                    .clone()
+                    .map(Source::Remote),
+            };
+            let Some(source) = source else {
                 if self.last.take().is_some() && ipc.clear_activity().is_err() {
                     return;
                 }
                 continue;
             };
 
-            let elapsed = self.player.elapsed();
-            let paused = self.player.is_paused();
+            let (song_id, paused, elapsed, duration_secs) = match &source {
+                Source::Local(song) => (
+                    song.id.clone(),
+                    self.player.is_paused(),
+                    self.player.elapsed(),
+                    song.duration as i64,
+                ),
+                // A handoff carries no duration, so there is no end timestamp to send and Discord
+                // shows an elapsed count instead of a countdown. That is the honest rendering:
+                // inventing a length would put a progress bar on screen that finishes at the
+                // wrong moment.
+                Source::Remote(remote) => (
+                    remote.track_uri.clone(),
+                    !remote.is_playing,
+                    Duration::from_millis(remote.position_ms.max(0) as u64),
+                    0,
+                ),
+            };
             let now = Published {
-                song_id: song.id.clone(),
+                song_id: song_id.clone(),
                 paused,
                 elapsed_secs: elapsed.as_secs(),
             };
@@ -178,10 +223,27 @@ impl Presence {
                 continue;
             }
 
-            let image = self.art_url(&song).await;
+            // No artwork for a relayed track, and deliberately not merely "not implemented".
+            // A handoff's artwork URL comes from whichever backend the *sending* device uses, and
+            // for Navidrome that URL embeds a non-expiring token — handing it to Discord would
+            // hand Discord the library. The lookup below only ever runs against this machine's own
+            // library, where the cover comes from MusicBrainz and the Cover Art Archive instead.
+            let image = match &source {
+                Source::Local(song) => self.art_url(song).await,
+                Source::Remote(_) => None,
+            };
 
-            let (clean_artist, clean_album) = parse_clean_artist_album(&song);
-            let mut clean_title = clean_track_title(&song.title);
+            let (clean_artist, clean_album, mut clean_title) = match &source {
+                Source::Local(song) => {
+                    let (artist, album) = parse_clean_artist_album(song);
+                    (artist, album, clean_track_title(&song.title))
+                }
+                Source::Remote(remote) => (
+                    Some(remote.artist_name.clone()),
+                    remote.album_name.clone(),
+                    clean_track_title(&remote.track_title),
+                ),
+            };
 
             // Deduplicate: If clean_title contains "Artist - ", strip out "Artist - "
             if let Some(ref artist) = clean_artist {
@@ -203,7 +265,7 @@ impl Presence {
                 _ => "Wander".to_string(),
             };
 
-            let hover_text = clean_album.as_deref().unwrap_or(song.album_or_unknown());
+            let hover_text = clean_album.as_deref().unwrap_or("Unknown Album");
 
             let mut assets = Assets::new().large_text(hover_text);
             if let Some(url) = image.as_deref() {
@@ -222,13 +284,13 @@ impl Presence {
             // Timestamps let Discord render a live countdown. Omitted while
             // paused, otherwise the bar keeps moving with no audio.
             let start_end;
-            if !paused && song.duration > 0 {
+            if !paused && duration_secs > 0 {
                 let now_secs = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
                 let start = now_secs - elapsed.as_secs() as i64;
-                start_end = (start, start + song.duration as i64);
+                start_end = (start, start + duration_secs);
                 activity =
                     activity.timestamps(Timestamps::new().start(start_end.0).end(start_end.1));
             }
