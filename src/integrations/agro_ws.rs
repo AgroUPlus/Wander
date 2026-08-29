@@ -50,6 +50,12 @@ pub enum LiveMessage {
         title: String,
         artist: String,
     },
+    /// A peer device requested a relay stream for a track this device holds.
+    RelayRequest {
+        session_id: String,
+        content_hash: String,
+        to_device: String,
+    },
 }
 
 /// Agro's envelope. `msg_type` is the discriminator; everything else rides in `payload`.
@@ -161,6 +167,11 @@ fn parse(text: &str) -> Option<LiveMessage> {
         }),
         "JAM_UPDATED" => Some(LiveMessage::JamUpdated),
         "JAM_NOW_PLAYING" => Some(LiveMessage::JamNowPlaying),
+        "RELAY_REQUEST" => Some(LiveMessage::RelayRequest {
+            session_id: envelope.payload["sessionId"].as_str().unwrap_or_default().to_string(),
+            content_hash: envelope.payload["contentHash"].as_str().unwrap_or_default().to_string(),
+            to_device: envelope.payload["toDevice"].as_str().unwrap_or_default().to_string(),
+        }),
         // HANDOFF, NODE_UPDATE and SETTINGS_SYNC are someone else's business today. Ignoring them
         // by name rather than by accident means adding one later is a single arm.
         _ => None,
@@ -259,6 +270,7 @@ mod tests {
                 LiveMessage::LibraryUpdated => updates += 1,
                 LiveMessage::JamUpdated | LiveMessage::JamNowPlaying => {}
                 LiveMessage::TrackDrop { .. } => {}
+                LiveMessage::RelayRequest { .. } => {}
             }
         }
         eprintln!("--- {updates} library updates, {offers} sync offers ---");
