@@ -1,8 +1,101 @@
 use super::layout::*;
 use super::types::*;
 use super::*;
-use crate::subsonic::models::{Album, Artist, Playlist, Song};
+use crate::subsonic::models::Song;
 use anyhow::Result;
+
+/// The tail every plugin search shares: clear the spinner, take the results or
+/// report the failure. Each plugin owns a different state struct, so this is a
+/// macro rather than a method — the shapes match, the types do not.
+macro_rules! apply_plugin_search {
+    ($app:ident, $plugin:ident, $label:literal, $result:expr, $field:ident $(, $clear:ident)?) => {{
+        $app.$plugin.searching = false;
+        match $result {
+            Ok(items) => {
+                $app.$plugin.$field = items;
+                $app.$plugin.selection.reset();
+                $($app.$plugin.$clear.clear();)?
+            }
+            Err(err) => {
+                $app.push_notification(
+                    NotificationLevel::Error,
+                    format!(concat!($label, " search error: {}"), err),
+                );
+            }
+        }
+    }};
+}
+
+impl App {
+    /// Every plugin download ends the same way: say what landed where, close the
+    /// operation out, and pull the new file into the library — a download is
+    /// exactly the moment a new file appears, so it is sent on rather than left
+    /// for the next launch to notice.
+    fn finish_plugin_download(
+        &mut self,
+        op_id: &str,
+        source: &str,
+        title: &str,
+        result: Result<std::path::PathBuf, String>,
+    ) {
+        match result {
+            Ok(path) => {
+                let short = crate::ui::widgets::truncate(title, 35);
+                // A torrent file is a pointer, not the music: hand it to whatever
+                // the system uses for those rather than claiming it downloaded.
+                let msg = if path.extension().map(|e| e == "torrent").unwrap_or(false) {
+                    let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                    format!(
+                        "Downloaded '{short}.torrent' to {} (Opened in system client)",
+                        path.display()
+                    )
+                } else {
+                    format!("Downloaded '{short}' to {}", path.display())
+                };
+                self.push_notification(NotificationLevel::Success, msg);
+                self.finish_operation(op_id, OperationStatus::Completed);
+                self.rescan_local_library();
+                self.sync_library();
+            }
+            Err(err) => {
+                let msg = format!("{source} download failed for '{title}': {err}");
+                self.push_notification(NotificationLevel::Error, msg);
+                self.finish_operation(op_id, OperationStatus::Failed(err));
+            }
+        }
+    }
+
+    /// Hands a plugin's resolved tracks to the player, keeping the queue that was
+    /// there so returning from the detour is possible.
+    fn start_plugin_stream(&mut self, source: &str, result: Result<Vec<Song>, String>) {
+        match result {
+            Ok(songs) => {
+                if songs.is_empty() {
+                    self.push_notification(
+                        NotificationLevel::Warning,
+                        format!("No playable audio from {source}"),
+                    );
+                    return;
+                }
+                let first_title = songs[0].title.clone();
+                let count = songs.len();
+                self.snapshot_queue();
+                self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
+                let msg = format!(
+                    "Streaming '{}' ({count} track(s) from {source})",
+                    crate::ui::widgets::truncate(&first_title, 35)
+                );
+                self.push_notification(NotificationLevel::Info, msg);
+            }
+            Err(err) => {
+                self.push_notification(
+                    NotificationLevel::Error,
+                    format!("{source} streaming error: {err}"),
+                );
+            }
+        }
+    }
+}
 
 impl App {
     pub fn bootstrap(&mut self) {
@@ -305,56 +398,14 @@ impl App {
                 }
             }
             LoadEvent::ArchiveResults(result) => {
-                self.archive_plugin.searching = false;
-                match result {
-                    Ok(items) => {
-                        self.archive_plugin.results = items;
-                        self.archive_plugin.selection.reset();
-                        self.archive_plugin.files.clear();
-                    }
-                    Err(err) => {
-                        self.push_notification(
-                            NotificationLevel::Error,
-                            format!("Archive search error: {err}"),
-                        );
-                    }
-                }
+                apply_plugin_search!(self, archive_plugin, "Archive", result, results, files)
             }
             LoadEvent::JamendoResults(result) => {
-                self.jamendo_plugin.searching = false;
-                match result {
-                    Ok(tracks) => {
-                        self.jamendo_plugin.results = tracks;
-                        self.jamendo_plugin.selection.reset();
-                    }
-                    Err(err) => {
-                        self.push_notification(
-                            NotificationLevel::Error,
-                            format!("Jamendo search error: {err}"),
-                        );
-                    }
-                }
+                apply_plugin_search!(self, jamendo_plugin, "Jamendo", result, results)
             }
             LoadEvent::JamendoDownloadFinished { title, result } => {
                 self.jamendo_plugin.working = false;
-                match result {
-                    Ok(path) => {
-                        let msg = format!(
-                            "Downloaded '{}' to {}",
-                            crate::ui::widgets::truncate(&title, 35),
-                            path.display()
-                        );
-                        self.push_notification(NotificationLevel::Success, msg);
-                        self.finish_operation("jamendo-dl", OperationStatus::Completed);
-                        self.rescan_local_library();
-                        self.sync_library();
-                    }
-                    Err(err) => {
-                        let msg = format!("Jamendo download failed for '{title}': {err}");
-                        self.push_notification(NotificationLevel::Error, msg.clone());
-                        self.finish_operation("jamendo-dl", OperationStatus::Failed(err));
-                    }
-                }
+                self.finish_plugin_download("jamendo-dl", "Jamendo", &title, result);
             }
             LoadEvent::ArchiveItemFiles { identifier, files } => {
                 self.archive_plugin.pending.remove(&identifier);
@@ -362,55 +413,11 @@ impl App {
             }
             LoadEvent::ArchiveStreamReady(result) => {
                 self.archive_plugin.working = false;
-                match result {
-                    Ok(songs) => {
-                        if songs.is_empty() {
-                            self.push_notification(
-                                NotificationLevel::Warning,
-                                "No playable audio in this Archive item",
-                            );
-                            return;
-                        }
-                        let first_title = songs[0].title.clone();
-                        let count = songs.len();
-                        self.snapshot_queue();
-                        self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
-                        let msg = format!(
-                            "Streaming '{}' ({count} track(s) from archive.org)",
-                            crate::ui::widgets::truncate(&first_title, 35)
-                        );
-                        self.push_notification(NotificationLevel::Info, msg);
-                    }
-                    Err(err) => {
-                        self.push_notification(
-                            NotificationLevel::Error,
-                            format!("Archive streaming error: {err}"),
-                        );
-                    }
-                }
+                self.start_plugin_stream("archive.org", result);
             }
             LoadEvent::ArchiveDownloadFinished { title, result } => {
                 self.archive_plugin.working = false;
-                match result {
-                    Ok(path) => {
-                        let msg = format!(
-                            "Downloaded '{}' to {}",
-                            crate::ui::widgets::truncate(&title, 35),
-                            path.display()
-                        );
-                        self.push_notification(NotificationLevel::Success, msg);
-                        self.finish_operation("archive-dl", OperationStatus::Completed);
-                        self.rescan_local_library();
-                        // A download is exactly the moment a new file appears, so send it on
-                        // rather than leaving it for the next launch to notice.
-                        self.sync_library();
-                    }
-                    Err(err) => {
-                        let msg = format!("Archive download failed for '{title}': {err}");
-                        self.push_notification(NotificationLevel::Error, msg.clone());
-                        self.finish_operation("archive-dl", OperationStatus::Failed(err));
-                    }
-                }
+                self.finish_plugin_download("archive-dl", "Archive", &title, result);
             }
             LoadEvent::PluginStatus(message) => {
                 self.status_message = Some(message.clone());
@@ -425,81 +432,17 @@ impl App {
             }
             #[cfg(feature = "nyaa")]
             LoadEvent::NyaaResults(result) => {
-                self.nyaa_plugin.searching = false;
-                match result {
-                    Ok(items) => {
-                        self.nyaa_plugin.results = items;
-                        self.nyaa_plugin.selection.reset();
-                    }
-                    Err(err) => {
-                        self.push_notification(
-                            NotificationLevel::Error,
-                            format!("Nyaa search error: {err}"),
-                        );
-                    }
-                }
+                apply_plugin_search!(self, nyaa_plugin, "Nyaa", result, results)
             }
             #[cfg(feature = "nyaa")]
             LoadEvent::NyaaStreamReady(result) => {
                 self.nyaa_plugin.downloading = false;
-                match result {
-                    Ok(songs) => {
-                        if songs.is_empty() {
-                            self.push_notification(
-                                NotificationLevel::Warning,
-                                "No audio tracks found to stream",
-                            );
-                            return;
-                        }
-                        let first_title = songs[0].title.clone();
-                        let count = songs.len();
-                        self.snapshot_queue();
-                        self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
-                        let msg = format!(
-                            "Streaming '{}' ({count} track(s) queued in Wander)",
-                            crate::ui::widgets::truncate(&first_title, 35)
-                        );
-                        self.push_notification(NotificationLevel::Info, msg);
-                    }
-                    Err(err) => {
-                        self.push_notification(
-                            NotificationLevel::Error,
-                            format!("Streaming error: {err}"),
-                        );
-                    }
-                }
+                self.start_plugin_stream("Nyaa", result);
             }
             #[cfg(feature = "nyaa")]
             LoadEvent::NyaaDownloadFinished { title, result } => {
                 self.nyaa_plugin.downloading = false;
-                match result {
-                    Ok(path) => {
-                        let is_torrent = path.extension().map(|e| e == "torrent").unwrap_or(false);
-                        let msg = if is_torrent {
-                            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
-                            format!(
-                                "Downloaded '{}.torrent' to {} (Opened in system client)",
-                                crate::ui::widgets::truncate(&title, 30),
-                                path.display()
-                            )
-                        } else {
-                            format!(
-                                "Downloaded '{}' to {}",
-                                crate::ui::widgets::truncate(&title, 35),
-                                path.display()
-                            )
-                        };
-                        self.push_notification(NotificationLevel::Success, msg);
-                        self.finish_operation("nyaa-dl", OperationStatus::Completed);
-                        self.rescan_local_library();
-                        self.sync_library();
-                    }
-                    Err(err) => {
-                        let msg = format!("Download failed for '{title}': {err}");
-                        self.push_notification(NotificationLevel::Error, msg.clone());
-                        self.finish_operation("nyaa-dl", OperationStatus::Failed(err));
-                    }
-                }
+                self.finish_plugin_download("nyaa-dl", "Nyaa", &title, result);
             }
             LoadEvent::Error(message) => {
                 self.push_notification(NotificationLevel::Error, message);

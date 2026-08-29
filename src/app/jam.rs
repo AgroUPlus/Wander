@@ -244,6 +244,50 @@ impl App {
         });
     }
 
+    /// Whether a library track is the one the room named.
+    ///
+    /// Loose on purpose: the room's title comes from whatever device queued it, so
+    /// remaster suffixes and a missing artist are normal and should still match.
+    fn matches_now_playing(
+        title: &str,
+        artist: Option<&str>,
+        wanted_title: &str,
+        wanted_artist: &str,
+    ) -> bool {
+        let s_title = clean_track_name(title);
+        let title_match = s_title == wanted_title
+            || s_title.contains(wanted_title)
+            || wanted_title.contains(&s_title);
+        let artist_match = wanted_artist.is_empty()
+            || artist
+                .map(|a| {
+                    let sa = clean_track_name(a);
+                    sa.is_empty()
+                        || sa == wanted_artist
+                        || sa.contains(wanted_artist)
+                        || wanted_artist.contains(&sa)
+                })
+                .unwrap_or(true);
+        title_match && artist_match
+    }
+
+    /// Starts the room's track here and jumps to where the room already is.
+    fn play_at_jam_position(
+        &mut self,
+        now: &crate::integrations::agro_jam::JamNowPlaying,
+        songs: Vec<crate::subsonic::models::Song>,
+        index: usize,
+    ) {
+        self.jam_playing_track = Some(now.track_id.clone());
+        self.player
+            .send(crate::player::PlayerCommand::PlayNow { songs, index });
+        if now.position_ms > 0 {
+            self.player.send(crate::player::PlayerCommand::SeekTo(
+                std::time::Duration::from_millis(now.position_ms as u64),
+            ));
+        }
+    }
+
     /// Plays what the server says the room is on, at the position it says.
     ///
     /// Nothing here decides anything. Picking a track out of the queue by hand would put this
@@ -259,38 +303,19 @@ impl App {
 
         let wanted_title = clean_track_name(&now.title);
         let wanted_artist = clean_track_name(&now.artist);
+        let matches = |title: &str, artist: Option<&str>| {
+            Self::matches_now_playing(title, artist, &wanted_title, &wanted_artist)
+        };
 
         // 1. Match against currently loaded tracks list
-        let found = self.tracks.iter().position(|song| {
-            let s_title = clean_track_name(&song.title);
-            let title_match = s_title == wanted_title
-                || s_title.contains(&wanted_title)
-                || wanted_title.contains(&s_title);
-            let artist_match = wanted_artist.is_empty()
-                || song
-                    .artist
-                    .as_deref()
-                    .map(|a| {
-                        let sa = clean_track_name(a);
-                        sa.is_empty()
-                            || sa == wanted_artist
-                            || sa.contains(&wanted_artist)
-                            || wanted_artist.contains(&sa)
-                    })
-                    .unwrap_or(true);
-            title_match && artist_match
-        });
+        let found = self
+            .tracks
+            .iter()
+            .position(|song| matches(&song.title, song.artist.as_deref()));
 
         if let Some(index) = found {
-            self.jam_playing_track = Some(now.track_id.clone());
             let songs = self.tracks.clone();
-            self.player
-                .send(crate::player::PlayerCommand::PlayNow { songs, index });
-            if now.position_ms > 0 {
-                self.player.send(crate::player::PlayerCommand::SeekTo(
-                    std::time::Duration::from_millis(now.position_ms as u64),
-                ));
-            }
+            self.play_at_jam_position(&now, songs, index);
             return;
         }
 
@@ -303,37 +328,11 @@ impl App {
             .and_then(|idx| {
                 idx.tracks
                     .iter()
-                    .find(|t| {
-                        let t_title = clean_track_name(&t.title);
-                        let title_match = t_title == wanted_title
-                            || t_title.contains(&wanted_title)
-                            || wanted_title.contains(&t_title);
-                        let artist_match = wanted_artist.is_empty()
-                            || t.artist
-                                .as_deref()
-                                .map(|a| {
-                                    let sa = clean_track_name(a);
-                                    sa.is_empty()
-                                        || sa == wanted_artist
-                                        || sa.contains(&wanted_artist)
-                                        || wanted_artist.contains(&sa)
-                                })
-                                .unwrap_or(true);
-                        title_match && artist_match
-                    })
+                    .find(|t| matches(&t.title, t.artist.as_deref()))
                     .map(|t| t.to_song())
             })
         {
-            self.jam_playing_track = Some(now.track_id.clone());
-            self.player.send(crate::player::PlayerCommand::PlayNow {
-                songs: vec![local_song],
-                index: 0,
-            });
-            if now.position_ms > 0 {
-                self.player.send(crate::player::PlayerCommand::SeekTo(
-                    std::time::Duration::from_millis(now.position_ms as u64),
-                ));
-            }
+            self.play_at_jam_position(&now, vec![local_song], 0);
             return;
         }
 
@@ -346,44 +345,17 @@ impl App {
             .chain(self.playlist_songs.iter())
             .chain(self.favorites.iter())
             .chain(queue_songs.iter())
-            .find(|song| {
-                let s_title = clean_track_name(&song.title);
-                let title_match = s_title == wanted_title
-                    || s_title.contains(&wanted_title)
-                    || wanted_title.contains(&s_title);
-                let artist_match = wanted_artist.is_empty()
-                    || song
-                        .artist
-                        .as_deref()
-                        .map(|a| {
-                            let sa = clean_track_name(a);
-                            sa.is_empty()
-                                || sa == wanted_artist
-                                || sa.contains(&wanted_artist)
-                                || wanted_artist.contains(&sa)
-                        })
-                        .unwrap_or(true);
-                title_match && artist_match
-            })
+            .find(|song| matches(&song.title, song.artist.as_deref()))
             .cloned();
 
         if let Some(song) = other_found {
-            self.jam_playing_track = Some(now.track_id.clone());
-            self.player.send(crate::player::PlayerCommand::PlayNow {
-                songs: vec![song],
-                index: 0,
-            });
-            if now.position_ms > 0 {
-                self.player.send(crate::player::PlayerCommand::SeekTo(
-                    std::time::Duration::from_millis(now.position_ms as u64),
-                ));
-            }
+            self.play_at_jam_position(&now, vec![song], 0);
             return;
         }
 
         // Not skipped: the room is still playing it, and skipping ahead is what puts a device
         // out of step. This one simply sits the track out.
-        self.status_message = Some(format!("You don't have “{}”", now.title));
+        self.status_message = Some(format!("You don't have \u{201c}{}\u{201d}", now.title));
         self.jam_playing_track = None;
     }
 

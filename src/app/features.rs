@@ -505,14 +505,7 @@ impl App {
 
         let http = self.http.clone();
         let loads = self.loads.clone();
-        // Usually already fetched for the length column, so Enter plays
-        // without a round trip.
-        let cached = self
-            .archive_plugin
-            .files
-            .get(&item.identifier)
-            .cloned()
-            .flatten();
+        let cached = self.cached_archive_files(&item.identifier);
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
@@ -572,6 +565,15 @@ impl App {
         });
     }
 
+    /// The item's file list if an earlier fetch left one behind — usually already
+    /// there for the length column, so Enter acts without a round trip.
+    fn cached_archive_files(
+        &self,
+        identifier: &str,
+    ) -> Option<Vec<crate::plugins::archive::api::ArchiveFile>> {
+        self.archive_plugin.files.get(identifier).cloned().flatten()
+    }
+
     pub(crate) fn download_selected_archive_item(&mut self) {
         let Some(item) = self.archive_plugin.selected_item().cloned() else {
             self.status_message = Some("No item selected to download".to_string());
@@ -598,12 +600,7 @@ impl App {
 
         let http = self.http.clone();
         let loads = self.loads.clone();
-        let cached = self
-            .archive_plugin
-            .files
-            .get(&item.identifier)
-            .cloned()
-            .flatten();
+        let cached = self.cached_archive_files(&item.identifier);
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
