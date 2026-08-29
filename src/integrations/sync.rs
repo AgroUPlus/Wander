@@ -29,6 +29,19 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// Read in chunks so a file is never held in memory whole.
 const HASH_BUFFER: usize = 64 * 1024;
 
+/// A peer source that holds a file.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerSource {
+    pub device_id: String,
+    pub petname: String,
+    pub lan_address: Option<String>,
+    #[serde(default)]
+    pub is_online: bool,
+    #[serde(default)]
+    pub is_server_archive: bool,
+}
+
 /// A track another device holds that this one does not.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +54,8 @@ pub struct MissingTrack {
     pub duration_ms: i64,
     #[serde(default)]
     pub size_bytes: i64,
+    #[serde(default)]
+    pub peer_sources: Vec<PeerSource>,
 }
 
 /// How the server says music should move between this account's devices.
@@ -84,6 +99,7 @@ pub enum UploadOutcome {
     Partial { received: u64 },
 }
 
+#[derive(Clone)]
 pub struct SyncClient {
     http: reqwest::Client,
     server: String,
@@ -121,74 +137,79 @@ impl SyncClient {
     }
 
     async fn try_exchange(&self) -> bool {
-        if let Ok(new_tok) = crate::integrations::agro::exchange_token(&self.server, &self.username, &self.passphrase, &self.device_id).await {
-            *self.token.write().await = Some(new_tok);
-            true
-        } else {
-            false
+        if let Ok(token) =
+            crate::integrations::agro::exchange_token(&self.server, &self.username, &self.passphrase, &self.device_id)
+                .await
+        {
+            let mut write = self.token.write().await;
+            *write = Some(token);
+            return true;
         }
+        false
     }
 
     // ── Metadata ────────────────────────────────────────────────────────────────────────────
 
-    /// Tells the server what this machine holds. Idempotent, so re-sending is wasteful but never
-    /// wrong.
+    /// Tells the server about these files without sending their audio.
+    ///
+    /// What backs index-only mode: the server learns who has what, and can answer "what am I
+    /// missing" from metadata alone.
     pub async fn report_holdings(&self, tracks: &[&LocalTrack]) -> Result<i64> {
-        let entries: Vec<_> = tracks
+        let mutation = "mutation Report($userId: String!, $deviceId: String!, $tracks: [HoldingInput!]!) { \
+                        reportHoldings(userId: $userId, deviceId: $deviceId, tracks: $tracks) }";
+        let holdings: Vec<serde_json::Value> = tracks
             .iter()
-            .filter_map(|track| {
-                let hash = track.content_hash.as_ref()?;
+            .filter_map(|t| {
+                let hash = t.content_hash.as_ref()?;
                 Some(json!({
                     "contentHash": hash,
-                    "title": track.title,
-                    "artist": track.artist.clone().unwrap_or_else(|| "Unknown Artist".into()),
-                    "album": track.album,
-                    "albumArtist": track.album_artist,
-                    "trackNo": track.track,
-                    "discNo": track.disc,
-                    "year": track.year,
-                    "genre": track.genre,
-                    "durationMs": track.duration as i64 * 1000,
-                    "sizeBytes": track.size as i64,
-                    "format": track.suffix,
-                    "bitrateKbps": track.bit_rate,
-                    // This machine's own handle for the file. Opaque to the server.
-                    "localRef": track.path.to_string_lossy(),
+                    "title": t.title,
+                    "artist": t.artist.as_deref().unwrap_or("Unknown Artist"),
+                    "album": t.album,
+                    "albumArtist": t.album_artist,
+                    "trackNo": t.track,
+                    "discNo": t.disc,
+                    "year": t.year,
+                    "genre": t.genre,
+                    "durationMs": t.duration as i64 * 1000,
+                    "sizeBytes": t.size as i64,
+                    "format": t.suffix,
+                    "bitrateKbps": t.bit_rate,
+                    "localRef": t.path.to_string_lossy(),
                 }))
             })
             .collect();
 
-        if entries.is_empty() {
+        if holdings.is_empty() {
             return Ok(0);
         }
 
-        let query = "mutation ReportHoldings($userId: String!, $deviceId: String!, \
-                     $tracks: [HoldingInput!]!) { \
-                     reportHoldings(userId: $userId, deviceId: $deviceId, tracks: $tracks) }";
         let data = self
             .graphql(
-                query,
+                mutation,
                 json!({
                     "userId": self.username,
                     "deviceId": self.device_id,
-                    "tracks": entries,
+                    "tracks": holdings,
                 }),
             )
             .await?;
-        Ok(data
+        let count = data
             .get("reportHoldings")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        Ok(count)
     }
 
-    /// What another of this account's devices has that this one does not.
+    /// What another of this account's devices holds that this machine lacks.
     ///
     /// The server decides, matching on the recording rather than the bytes, so a different rip of
     /// something already held here does not come back.
     pub async fn missing_here(&self, limit: i64) -> Result<Vec<MissingTrack>> {
         let query = "query Missing($userId: String!, $deviceId: String!, $limit: Int) { \
                      missingOnDevice(userId: $userId, deviceId: $deviceId, limit: $limit) { \
-                     contentHash title artist album durationMs sizeBytes } }";
+                     contentHash title artist album durationMs sizeBytes \
+                     peerSources { deviceId petname lanAddress isOnline isServerArchive } } }";
         let data = self
             .graphql(
                 query,
@@ -428,33 +449,104 @@ impl SyncClient {
     /// The hash is re-checked against what arrived. A corrupted transfer that kept its name would
     /// be indistinguishable from the real thing forever after.
     pub async fn fetch(&self, track: &MissingTrack, dir: &Path) -> Result<std::path::PathBuf> {
-        let fetch_url = format!("{}/api/v1/library/fetch/{}", self.server, track.content_hash);
-        let mut auth = self.auth_header().await;
-        let mut response = self
-            .http
-            .get(&fetch_url)
-            .header("Authorization", &auth)
-            .send()
-            .await
-            .context("asking the server for the file")?;
+        let mut p2p_response: Option<reqwest::Response> = None;
 
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
-            auth = self.auth_header().await;
-            response = self
-                .http
-                .get(&fetch_url)
-                .header("Authorization", &auth)
-                .send()
-                .await
-                .context("asking the server for the file")?;
+        // 1. Try direct LAN P2P transfer if peer has a reachable LAN address
+        for source in &track.peer_sources {
+            if let Some(lan) = &source.lan_address {
+                let p2p_url = format!("http://{lan}/p2p/fetch/{}", track.content_hash);
+                let auth = self.auth_header().await;
+                if let Ok(res) = self
+                    .http
+                    .get(&p2p_url)
+                    .header("Authorization", &auth)
+                    .timeout(Duration::from_secs(4))
+                    .send()
+                    .await
+                {
+                    if res.status().is_success() {
+                        p2p_response = Some(res);
+                        break;
+                    }
+                }
+            }
         }
 
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "the server would not hand that file over ({})",
-                response.status()
-            ));
+        // 2. If LAN P2P is not reachable, try ephemeral relay pipe on Agro server
+        if p2p_response.is_none() {
+            if let Some(peer) = track.peer_sources.iter().find(|s| !s.is_server_archive) {
+                let open_url = format!("{}/api/v1/relay/open", self.server);
+                let auth = self.auth_header().await;
+                let open_body = json!({
+                    "contentHash": track.content_hash,
+                    "fromDevice": peer.device_id,
+                    "toDevice": self.device_id,
+                });
+                if let Ok(open_res) = self
+                    .http
+                    .post(&open_url)
+                    .header("Authorization", &auth)
+                    .json(&open_body)
+                    .timeout(Duration::from_secs(5))
+                    .send()
+                    .await
+                {
+                    if open_res.status().is_success() {
+                        if let Ok(val) = open_res.json::<serde_json::Value>().await {
+                            if let Some(session_id) = val.get("sessionId").and_then(|s| s.as_str()) {
+                                let recv_url = format!("{}/api/v1/relay/{session_id}/receive", self.server);
+                                if let Ok(res) = self
+                                    .http
+                                    .get(&recv_url)
+                                    .header("Authorization", &auth)
+                                    .send()
+                                    .await
+                                {
+                                    if res.status().is_success() {
+                                        p2p_response = Some(res);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
+
+        // 3. Fall back to permanent server archive
+        let response = match p2p_response {
+            Some(res) => res,
+            None => {
+                let fetch_url = format!("{}/api/v1/library/fetch/{}", self.server, track.content_hash);
+                let mut auth = self.auth_header().await;
+                let mut res = self
+                    .http
+                    .get(&fetch_url)
+                    .header("Authorization", &auth)
+                    .send()
+                    .await
+                    .context("asking the server for the file")?;
+
+                if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+                    auth = self.auth_header().await;
+                    res = self
+                        .http
+                        .get(&fetch_url)
+                        .header("Authorization", &auth)
+                        .send()
+                        .await
+                        .context("asking the server for the file")?;
+                }
+
+                if !res.status().is_success() {
+                    return Err(anyhow!(
+                        "the server would not hand that file over ({})",
+                        res.status()
+                    ));
+                }
+                res
+            }
+        };
 
         let artist = crate::plugins::sanitize_filename(&track.artist);
         let album = crate::plugins::sanitize_filename(track.album.as_deref().unwrap_or("Unknown Album"));
