@@ -99,7 +99,8 @@ struct Published {
 /// process, and this process tells Discord. Wanda gets Rich Presence without ever speaking to
 /// Discord, which is the only way it could — Discord's Android app exposes no IPC socket at all.
 enum Source {
-    /// This machine is playing. Always wins: whatever is in your ears here is the honest answer.
+    /// This machine is playing. Wins while it *is* playing: what is in your ears here is the
+    /// honest answer. A track merely loaded and paused does not win — see the poll loop.
     Local(Box<crate::subsonic::models::Song>),
     /// Nothing is playing here and a paired device is. Carries no artwork by design — see
     /// [`Presence::art_url`].
@@ -114,7 +115,9 @@ struct Presence {
     /// album id -> cover art URL, `None` when the album has no MusicBrainz ID.
     /// Negative results are cached too, so we do not re-query for the ~90% of
     /// albums that have none.
-    art: HashMap<String, Option<String>>,
+    /// Catalogue lookups already made, so a track being republished every few seconds is one
+    /// request rather than one per poll.
+    art: HashMap<String, CoverMatch>,
     last: Option<Published>,
     /// Last thing that happened to cover art, shown in Settings. Rich Presence
     /// fails silently otherwise, which makes a missing image impossible to
@@ -166,16 +169,27 @@ impl Presence {
             tokio::time::sleep(POLL).await;
 
             let status = self.player.status();
-            let source = match status.current.clone() {
-                Some(song) => Some(Source::Local(Box::new(song))),
-                // Only consulted when nothing is playing here. The daemon leaves this set only
-                // while another device is genuinely mid-track — see `RemoteFreshness` — so an
-                // empty store means nobody in the fleet is listening, not that we failed to ask.
-                None => crate::integrations::agro::get_remote_handoff()
-                    .read()
-                    .await
-                    .clone()
-                    .map(Source::Remote),
+            // Sound coming out of *this* machine, not merely a track sitting loaded in it. That
+            // distinction is the whole feature: this used to ask whether anything was loaded, so
+            // pausing here and picking the song up on the phone left Discord showing the paused
+            // desktop track — the one thing on the account that was definitely not being
+            // listened to.
+            //
+            // The daemon leaves the remote store set only while another device is genuinely
+            // mid-track (see `RemoteFreshness`), so an empty store means nobody in the fleet is
+            // listening rather than that we failed to ask. Falling back to the local paused track
+            // when it is empty is deliberate: with nobody else playing, the last thing you had on
+            // is still the most honest thing to show.
+            let playing_here = status.current.is_some() && !self.player.is_paused();
+            let remote = if playing_here {
+                None
+            } else {
+                crate::integrations::agro::get_remote_handoff().read().await.clone()
+            };
+            let source = match (remote, status.current.clone()) {
+                (Some(remote), _) => Some(Source::Remote(remote)),
+                (None, Some(song)) => Some(Source::Local(Box::new(song))),
+                (None, None) => None,
             };
             let Some(source) = source else {
                 if self.last.take().is_some() && ipc.clear_activity().is_err() {
@@ -191,15 +205,15 @@ impl Presence {
                     self.player.elapsed(),
                     song.duration as i64,
                 ),
-                // A handoff carries no duration, so there is no end timestamp to send and Discord
-                // shows an elapsed count instead of a countdown. That is the honest rendering:
-                // inventing a length would put a progress bar on screen that finishes at the
-                // wrong moment.
+                // The length travels with the handoff now, so a relayed track gets the same
+                // progress bar a local one does. It is still 0 for a livestream, or for a sender
+                // too old to send one — and 0 means no end timestamp, which is what puts a
+                // running clock on screen instead of a bar that finishes at the wrong moment.
                 Source::Remote(remote) => (
                     remote.track_uri.clone(),
                     !remote.is_playing,
                     Duration::from_millis(remote.position_ms.max(0) as u64),
-                    0,
+                    remote.duration_ms.max(0) / 1000,
                 ),
             };
             let now = Published {
@@ -223,14 +237,28 @@ impl Presence {
                 continue;
             }
 
-            // No artwork for a relayed track, and deliberately not merely "not implemented".
-            // A handoff's artwork URL comes from whichever backend the *sending* device uses, and
-            // for Navidrome that URL embeds a non-expiring token — handing it to Discord would
-            // hand Discord the library. The lookup below only ever runs against this machine's own
-            // library, where the cover comes from MusicBrainz and the Cover Art Archive instead.
+            // A relayed track never publishes the *handoff's own* artwork URL: that comes from
+            // whichever backend the sending device uses, and for Navidrome it embeds a
+            // non-expiring token, so handing it to Discord would hand Discord the library.
+            //
+            // What it does get is the public lookup, by name. Nothing about that touches the
+            // sender: it is the artist and title — which are already on screen in the activity —
+            // asked of a public catalogue. Withholding it left the phone's tracks showing a
+            // placeholder for no benefit anyone was getting.
+            let mut catalogue_album = None;
             let image = match &source {
                 Source::Local(song) => self.art_url(song).await,
-                Source::Remote(_) => None,
+                Source::Remote(remote) => {
+                    let found = self
+                        .public_art_url(
+                            &remote.track_uri,
+                            &remote.artist_name,
+                            &clean_track_title(&remote.track_title),
+                        )
+                        .await;
+                    catalogue_album = found.album;
+                    found.url
+                }
             };
 
             let (clean_artist, clean_album, mut clean_title) = match &source {
@@ -238,9 +266,17 @@ impl Presence {
                     let (artist, album) = parse_clean_artist_album(song);
                     (artist, album, clean_track_title(&song.title))
                 }
+                // The record the cover came off, when the sender named no album. A local track
+                // reads "Unknown Album" off its own library and that is the truth about the file;
+                // a relayed one had nothing to read at all, and the catalogue match that just
+                // supplied the artwork is the same record.
                 Source::Remote(remote) => (
                     Some(remote.artist_name.clone()),
-                    remote.album_name.clone(),
+                    remote
+                        .album_name
+                        .clone()
+                        .filter(|album| !album.trim().is_empty())
+                        .or(catalogue_album),
                     clean_track_title(&remote.track_title),
                 ),
             };
@@ -312,7 +348,7 @@ impl Presence {
 
         let cache_key = song.id.clone();
         if let Some(cached) = self.art.get(&cache_key) {
-            return cached.clone();
+            return cached.url.clone();
         }
 
         // 1. Try Subsonic album info & MusicBrainz CAA
@@ -331,7 +367,13 @@ impl Presence {
                     .filter(|url| is_safe_to_share(url));
 
                 if let Some(u) = url {
-                    self.art.insert(cache_key, Some(u.clone()));
+                    self.art.insert(
+                        cache_key,
+                        CoverMatch {
+                            url: Some(u.clone()),
+                            album: None,
+                        },
+                    );
                     return Some(u);
                 }
             }
@@ -340,17 +382,40 @@ impl Presence {
         // 2. Try iTunes Search API for public high-res cover art
         let (clean_artist, _) = parse_clean_artist_album(song);
         let clean_title = clean_track_title(&song.title);
-        let search_artist = clean_artist.as_deref().unwrap_or("");
+        self.public_art_url(&cache_key, clean_artist.as_deref().unwrap_or(""), &clean_title)
+            .await
+            .url
+    }
 
-        if let Some(itunes_url) = fetch_itunes_cover(&self.http, search_artist, &clean_title).await {
-            self.art.insert(cache_key, Some(itunes_url.clone()));
-            return Some(itunes_url);
+    /// A cover found by name alone, for a track this machine does not hold.
+    ///
+    /// The album-info step above cannot help here — it looks the album up in *this* machine's
+    /// library, and a relayed track is by definition playing somewhere else. What is left is the
+    /// public catalogue, which only ever sees the artist and title that are already being
+    /// published as the activity itself.
+    ///
+    /// Returns the record's name along with the cover: it comes back in the same response, and a
+    /// handoff that named no album is exactly the case this is standing in for.
+    async fn public_art_url(&mut self, cache_key: &str, artist: &str, title: &str) -> CoverMatch {
+        if !self.config.cover_art {
+            self.report("disabled in config");
+            return CoverMatch::default();
+        }
+        if let Some(cached) = self.art.get(cache_key) {
+            return cached.clone();
         }
 
-        // 3. Fallback to official high-res public Wander logo URL
-        let fallback = Some("https://raw.githubusercontent.com/Kolbxyz/Wander/main/assets/cover.png".to_string());
-        self.art.insert(cache_key, fallback.clone());
-        fallback
+        let found = match fetch_itunes_cover(&self.http, artist, title).await {
+            Some(found) => found,
+            // Fallback to the official high-res public Wander logo. No album with it: the logo is
+            // not a record, and naming one it did not come from would be a guess.
+            None => CoverMatch {
+                url: Some(WANDER_COVER_URL.to_string()),
+                album: None,
+            },
+        };
+        self.art.insert(cache_key.to_string(), found.clone());
+        found
     }
 
     fn report(&self, message: &str) {
@@ -360,7 +425,18 @@ impl Presence {
     }
 }
 
-async fn fetch_itunes_cover(http: &reqwest::Client, artist: &str, title: &str) -> Option<String> {
+/// What a catalogue lookup found: the cover, and the record it belongs to.
+#[derive(Clone, Default)]
+struct CoverMatch {
+    url: Option<String>,
+    album: Option<String>,
+}
+
+/// The public Wander logo, used when no catalogue match is found at all.
+const WANDER_COVER_URL: &str =
+    "https://raw.githubusercontent.com/Kolbxyz/Wander/main/assets/cover.png";
+
+async fn fetch_itunes_cover(http: &reqwest::Client, artist: &str, title: &str) -> Option<CoverMatch> {
     let query = if artist.trim().is_empty() {
         title.to_string()
     } else {
@@ -372,8 +448,16 @@ async fn fetch_itunes_cover(http: &reqwest::Client, artist: &str, title: &str) -
     );
     let resp = http.get(&url).send().await.ok()?;
     let json: serde_json::Value = resp.json().await.ok()?;
-    let artwork = json["results"][0]["artworkUrl100"].as_str()?;
-    Some(artwork.replace("100x100bb", "600x600bb"))
+    let result = &json["results"][0];
+    let artwork = result["artworkUrl100"].as_str()?;
+    Some(CoverMatch {
+        url: Some(artwork.replace("100x100bb", "600x600bb")),
+        album: result["collectionName"]
+            .as_str()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string),
+    })
 }
 
 /// Guard against ever handing Discord a credential-bearing URL.
