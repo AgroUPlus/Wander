@@ -215,7 +215,6 @@ pub struct PluginsConfig {
     #[cfg(feature = "nyaa")]
     pub nyaa: NyaaConfig,
     pub archive: ArchiveConfig,
-    pub jamendo: JamendoConfig,
 }
 
 impl Default for PluginsConfig {
@@ -224,7 +223,6 @@ impl Default for PluginsConfig {
             #[cfg(feature = "nyaa")]
             nyaa: NyaaConfig::default(),
             archive: ArchiveConfig::default(),
-            jamendo: JamendoConfig::default(),
         }
     }
 }
@@ -285,33 +283,6 @@ impl Default for ArchiveConfig {
             enabled: true,
             download_dir: None,
             collection: "audio".to_string(),
-            primary_action: OnlinePrimaryAction::Stream,
-        }
-    }
-}
-
-/// Jamendo plugin: a general music catalogue of freely licensed tracks.
-///
-/// Needs a free client ID from <https://devportal.jamendo.com>; the API
-/// rejects anonymous requests, so the plugin can do nothing without one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct JamendoConfig {
-    pub enabled: bool,
-    pub client_id: String,
-    pub download_dir: Option<PathBuf>,
-    /// Format code from `JamendoFormat::code`.
-    pub format: String,
-    pub primary_action: OnlinePrimaryAction,
-}
-
-impl Default for JamendoConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            client_id: String::new(),
-            download_dir: None,
-            format: "flac".to_string(),
             primary_action: OnlinePrimaryAction::Stream,
         }
     }

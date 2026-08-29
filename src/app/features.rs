@@ -385,7 +385,6 @@ impl App {
             #[cfg(feature = "nyaa")]
             OnlineSource::Nyaa => self.nyaa_plugin.editing_query = true,
             OnlineSource::Archive => self.archive_plugin.editing_query = true,
-            OnlineSource::Jamendo => self.jamendo_plugin.editing_query = true,
         }
     }
 
@@ -397,7 +396,6 @@ impl App {
             #[cfg(feature = "nyaa")]
             OnlineSource::Nyaa => self.cycle_nyaa_category(),
             OnlineSource::Archive => self.cycle_archive_collection(),
-            OnlineSource::Jamendo => self.cycle_jamendo_format(),
         }
     }
 
@@ -645,170 +643,6 @@ impl App {
         directories::UserDirs::new()
             .and_then(|ud| ud.audio_dir().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| std::path::PathBuf::from("./downloads"))
-    }
-
-    // ---- Jamendo Plugin -------------------------------------------------
-
-    pub(crate) fn search_jamendo(&mut self, query: String) {
-        if query.trim().is_empty() {
-            self.status_message = Some("Enter a search query first".to_string());
-            return;
-        }
-        self.jamendo_plugin.query = query.clone();
-        self.jamendo_plugin.searching = true;
-        self.status_message = Some(format!("Searching Jamendo for '{}'...", query));
-
-        let http = self.http.clone();
-        let loads = self.loads.clone();
-        let client_id = self.config.plugins.jamendo.client_id.clone();
-        let format =
-            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
-
-        tokio::spawn(async move {
-            let res =
-                crate::plugins::jamendo::api::search_jamendo(&http, &client_id, &query, format)
-                    .await
-                    .map_err(|e| format!("{e:#}"));
-            let _ = loads.send(LoadEvent::JamendoResults(res));
-        });
-    }
-
-    pub(crate) fn cycle_jamendo_format(&mut self) {
-        use crate::plugins::jamendo::JamendoFormat;
-        let formats = JamendoFormat::ALL;
-        let current = JamendoFormat::from_code(&self.config.plugins.jamendo.format);
-        let idx = formats.iter().position(|f| *f == current).unwrap_or(0);
-        let next = formats[(idx + 1) % formats.len()];
-        self.config.plugins.jamendo.format = next.code().to_string();
-        let _ = self.config.save();
-        self.status_message = Some(format!("Jamendo format set to: {}", next.label()));
-
-        // The stream URLs embed the format, so old results point at the old one.
-        if !self.jamendo_plugin.query.is_empty() {
-            let query = self.jamendo_plugin.query.clone();
-            self.search_jamendo(query);
-        }
-    }
-
-    /// Convert one search result into a queueable track.
-    fn jamendo_song(&self, track: &crate::plugins::jamendo::JamendoTrack) -> Song {
-        let format =
-            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
-        Song {
-            id: track.audio.clone(),
-            title: track.name.clone(),
-            album: (!track.album_name.is_empty()).then(|| track.album_name.clone()),
-            album_id: None,
-            artist: Some(track.artist_name.clone()),
-            artist_id: None,
-            cover_art: track.image.clone(),
-            duration: track.duration,
-            bit_rate: 0,
-            track: None,
-            year: track.release_year,
-            genre: None,
-            suffix: Some(format.suffix().to_string()),
-            content_type: None,
-            size: 0,
-            starred: None,
-            user_rating: None,
-            play_count: 0,
-            genres: Vec::new(),
-            moods: Vec::new(),
-        }
-    }
-
-    /// Play the highlighted track, and queue the rest of the results behind it.
-    ///
-    /// A search returns a whole listful of songs; queueing only the one that
-    /// was highlighted would throw the other ninety-nine away.
-    pub(crate) fn stream_selected_jamendo_track(&mut self) {
-        if self.jamendo_plugin.results.is_empty() {
-            self.status_message = Some("No track selected to play".to_string());
-            return;
-        }
-
-        let index = self
-            .jamendo_plugin
-            .selection
-            .index
-            .min(self.jamendo_plugin.results.len() - 1);
-        let songs: Vec<Song> = self
-            .jamendo_plugin
-            .results
-            .iter()
-            .map(|track| self.jamendo_song(track))
-            .collect();
-        let title = songs[index].title.clone();
-        let count = songs.len();
-
-        self.snapshot_queue();
-        self.player.send(PlayerCommand::PlayNow { songs, index });
-        self.status_message = Some(format!(
-            "Playing '{}' ({count} track(s) queued from Jamendo)",
-            crate::ui::widgets::truncate(&title, 35)
-        ));
-    }
-
-    pub(crate) fn download_selected_jamendo_track(&mut self) {
-        let Some(track) = self.jamendo_plugin.selected_track().cloned() else {
-            self.status_message = Some("No track selected to download".to_string());
-            return;
-        };
-        let Some(url) = track.audiodownload.clone() else {
-            self.status_message =
-                Some("This artist does not allow downloads of this track".to_string());
-            return;
-        };
-
-        let target_dir = self.online_download_dir(self.config.plugins.jamendo.download_dir.clone());
-        let format =
-            crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
-        let file_name = format!(
-            "{} - {}.{}",
-            crate::plugins::sanitize_filename(&track.artist_name),
-            crate::plugins::sanitize_filename(&track.name),
-            format.suffix()
-        );
-
-        self.jamendo_plugin.working = true;
-        let title_short = crate::ui::widgets::truncate(&track.name, 35);
-        self.push_notification(
-            NotificationLevel::Info,
-            format!("Started downloading '{title_short}'"),
-        );
-        self.add_operation(Operation {
-            id: "jamendo-dl".into(),
-            title: track.name.clone(),
-            kind: OperationKind::Download,
-            progress: None,
-            status: OperationStatus::Running,
-            details: Some("Downloading from Jamendo...".into()),
-            started_at: std::time::Instant::now(),
-        });
-
-        let http = self.http.clone();
-        let loads = self.loads.clone();
-        let title = track.name.clone();
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-        self.start_plugin_job(cancel, async move {
-            let result = async {
-                tokio::fs::create_dir_all(&target_dir).await?;
-                let response = http.get(&url).send().await?;
-                if !response.status().is_success() {
-                    anyhow::bail!("Jamendo returned HTTP {}", response.status());
-                }
-                let bytes = response.bytes().await?;
-                let target = target_dir.join(&file_name);
-                tokio::fs::write(&target, &bytes).await?;
-                Ok::<std::path::PathBuf, anyhow::Error>(target)
-            }
-            .await
-            .map_err(|e| format!("{e:#}"));
-
-            let _ = loads.send(LoadEvent::JamendoDownloadFinished { title, result });
-        });
     }
 
     // ---- Nyaa Online Plugin --------------------------------------------

@@ -239,7 +239,6 @@ pub struct App {
     #[cfg(feature = "nyaa")]
     pub nyaa_plugin: crate::plugins::nyaa::NyaaPluginState,
     pub archive_plugin: crate::plugins::archive::ArchivePluginState,
-    pub jamendo_plugin: crate::plugins::jamendo::JamendoPluginState,
     /// The plugin fetch currently running, if any. Starting another cancels
     /// it: two torrents competing for the same connection help nobody, and a
     /// finished download that nobody asked for any more is pure waste.
@@ -393,7 +392,6 @@ impl App {
             #[cfg(feature = "nyaa")]
             nyaa_plugin: crate::plugins::nyaa::NyaaPluginState::new(),
             archive_plugin: crate::plugins::archive::ArchivePluginState::new(),
-            jamendo_plugin: crate::plugins::jamendo::JamendoPluginState::new(),
             plugin_job: None,
             online_source,
             active_drag: None,

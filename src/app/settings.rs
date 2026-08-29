@@ -27,7 +27,7 @@ impl App {
             self.go_to_tab(Tab::Online);
             self.push_notification(
                 NotificationLevel::Info,
-                "Explore free music plugins on Internet Archive and Jamendo!",
+                "Explore free music plugins on the Internet Archive!",
             );
             return;
         }

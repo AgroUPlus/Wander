@@ -1,5 +1,4 @@
 pub mod archive;
-pub mod jamendo;
 
 #[cfg(feature = "nyaa")]
 pub mod nyaa;

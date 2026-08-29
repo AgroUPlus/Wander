@@ -34,9 +34,6 @@ impl App {
         if self.archive_plugin.editing_query && self.handle_archive_query_key(key) {
             return;
         }
-        if self.jamendo_plugin.editing_query && self.handle_jamendo_query_key(key) {
-            return;
-        }
 
         if self.tab == Tab::Online {
             // Switching sources is shared; everything else belongs to whichever
@@ -64,26 +61,6 @@ impl App {
                         && key.modifiers.is_empty()
                     {
                         self.stream_selected_nyaa_item();
-                        return;
-                    }
-                }
-                OnlineSource::Jamendo => {
-                    if key.code == KeyCode::Char('/') && no_mods {
-                        self.jamendo_plugin.editing_query = true;
-                        return;
-                    }
-                    if key.code == KeyCode::Char('c') && no_mods {
-                        self.cycle_jamendo_format();
-                        return;
-                    }
-                    if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
-                        self.download_selected_jamendo_track();
-                        return;
-                    }
-                    if (key.code == KeyCode::Char('s') || key.code == KeyCode::Char('p'))
-                        && key.modifiers.is_empty()
-                    {
-                        self.stream_selected_jamendo_track();
                         return;
                     }
                 }
@@ -304,39 +281,6 @@ impl App {
             KeyCode::Right => self.nyaa_plugin.query_input.right(),
             KeyCode::Home => self.nyaa_plugin.query_input.home(),
             KeyCode::End => self.nyaa_plugin.query_input.end(),
-            _ => {}
-        }
-        true
-    }
-
-    pub(crate) fn handle_jamendo_query_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::{KeyCode, KeyModifiers};
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            KeyCode::Enter => {
-                self.jamendo_plugin.editing_query = false;
-                let query = self.jamendo_plugin.query_input.value().to_string();
-                self.search_jamendo(query);
-                return true;
-            }
-            KeyCode::Esc => {
-                self.jamendo_plugin.editing_query = false;
-                return true;
-            }
-            _ => {}
-        }
-
-        match key.code {
-            KeyCode::Char('w') if ctrl => self.jamendo_plugin.query_input.delete_word(),
-            KeyCode::Char('u') if ctrl => self.jamendo_plugin.query_input.clear(),
-            KeyCode::Char(ch) => self.jamendo_plugin.query_input.insert(ch),
-            KeyCode::Backspace => self.jamendo_plugin.query_input.backspace(),
-            KeyCode::Delete => self.jamendo_plugin.query_input.delete(),
-            KeyCode::Left => self.jamendo_plugin.query_input.left(),
-            KeyCode::Right => self.jamendo_plugin.query_input.right(),
-            KeyCode::Home => self.jamendo_plugin.query_input.home(),
-            KeyCode::End => self.jamendo_plugin.query_input.end(),
             _ => {}
         }
         true

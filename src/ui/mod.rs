@@ -385,9 +385,6 @@ fn draw_body(
             crate::app::OnlineSource::Archive => {
                 crate::plugins::archive::ui::draw(frame, content, app, theme, hits)
             }
-            crate::app::OnlineSource::Jamendo => {
-                crate::plugins::jamendo::ui::draw(frame, content, app, theme, hits)
-            }
         },
         Tab::Operations => operations::draw(frame, content, app, theme, hits),
         Tab::Settings => settings::draw(frame, content, app, theme, hits),
