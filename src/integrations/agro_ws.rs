@@ -96,7 +96,12 @@ pub fn spawn(
             crate::integrations::agro::cached_token().unwrap_or_else(|| token_or_pass.clone());
         let mut backoff = BASE_BACKOFF;
         loop {
-            let url = socket_url(&server, &active_token, &device_id);
+            // Re-detected on every attempt rather than captured once: a laptop that moved to a
+            // different network — or onto one at all — reconnects here, and the address it had
+            // when the process started is the wrong one by then.
+            let lan_address =
+                crate::integrations::p2p_server::detect_local_ip().map(|ip| format!("{ip}:8701"));
+            let url = socket_url(&server, &active_token, &device_id, lan_address.as_deref());
             let ok = if let Some(ref u) = url {
                 listen(u, &tx).await.is_ok()
             } else {
@@ -205,8 +210,22 @@ fn parse(text: &str) -> Option<LiveMessage> {
     }
 }
 
-/// `https://host` → `wss://host/ws/sync?token=…&device=…`.
-fn socket_url(server: &str, token: &str, device_id: &str) -> Option<String> {
+/// `https://host` → `wss://host/ws/sync?token=…&device=…&lan=…`.
+///
+/// `lan` is where this machine can be reached for direct peer-to-peer transfers. It travels on the
+/// handshake because the server holds it only in memory, for exactly as long as the socket lives:
+/// it used to be sent once by `registerNode` at startup, so a redeploy or a dropped connection
+/// erased it for good and transfers quietly fell back to relaying through the server. Sending it
+/// with every connection makes a reconnect restore it, which this loop already does on its own.
+///
+/// Omitted when the machine has no usable address, which is the honest answer — a peer told to
+/// connect nowhere is worse than a peer that admits it cannot be reached directly.
+fn socket_url(
+    server: &str,
+    token: &str,
+    device_id: &str,
+    lan_address: Option<&str>,
+) -> Option<String> {
     let trimmed = server.trim().trim_end_matches('/');
     let base = if let Some(rest) = trimmed.strip_prefix("https://") {
         format!("wss://{rest}")
@@ -218,11 +237,15 @@ fn socket_url(server: &str, token: &str, device_id: &str) -> Option<String> {
     if base.len() <= "wss://".len() {
         return None;
     }
-    Some(format!(
+    let mut url = format!(
         "{base}/ws/sync?token={}&device={}",
         urlencoding::encode(token),
         urlencoding::encode(device_id)
-    ))
+    );
+    if let Some(lan) = lan_address.map(str::trim).filter(|l| !l.is_empty()) {
+        url.push_str(&format!("&lan={}", urlencoding::encode(lan)));
+    }
+    Some(url)
 }
 
 #[cfg(test)]
@@ -232,22 +255,45 @@ mod tests {
     #[test]
     fn builds_a_socket_url_from_either_scheme() {
         assert_eq!(
-            socket_url("https://agro.example.com/", "tok en", "wander-desktop").unwrap(),
+            socket_url("https://agro.example.com/", "tok en", "wander-desktop", None).unwrap(),
             "wss://agro.example.com/ws/sync?token=tok%20en&device=wander-desktop"
         );
         assert!(
-            socket_url("http://127.0.0.1:1674", "t", "d")
+            socket_url("http://127.0.0.1:1674", "t", "d", None)
                 .unwrap()
                 .starts_with("ws://127.0.0.1:1674/ws/sync")
         );
     }
 
+    /// The address has to survive being put in a query string, or the server parses a truncated
+    /// one and hands another device somewhere useless to connect.
+    #[test]
+    fn carries_the_lan_address_when_there_is_one() {
+        assert_eq!(
+            socket_url("https://a.example", "t", "d", Some("192.168.1.50:8701")).unwrap(),
+            "wss://a.example/ws/sync?token=t&device=d&lan=192.168.1.50%3A8701"
+        );
+        assert_eq!(
+            socket_url("https://a.example", "t", "d", Some("[fe80::1]:8701")).unwrap(),
+            "wss://a.example/ws/sync?token=t&device=d&lan=%5Bfe80%3A%3A1%5D%3A8701"
+        );
+    }
+
+    /// A machine with no address says nothing rather than sending an empty one.
+    #[test]
+    fn omits_the_lan_address_when_there_is_none() {
+        for absent in [None, Some(""), Some("   ")] {
+            let url = socket_url("https://a.example", "t", "d", absent).unwrap();
+            assert!(!url.contains("lan="), "should not carry a lan param: {url}");
+        }
+    }
+
     #[test]
     fn refuses_an_address_that_is_not_http() {
-        assert!(socket_url("agro.example.com", "t", "d").is_none());
-        assert!(socket_url("ftp://agro.example.com", "t", "d").is_none());
-        assert!(socket_url("https://", "t", "d").is_none());
-        assert!(socket_url("", "t", "d").is_none());
+        assert!(socket_url("agro.example.com", "t", "d", None).is_none());
+        assert!(socket_url("ftp://agro.example.com", "t", "d", None).is_none());
+        assert!(socket_url("https://", "t", "d", None).is_none());
+        assert!(socket_url("", "t", "d", None).is_none());
     }
 
     #[test]
