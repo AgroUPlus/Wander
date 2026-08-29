@@ -670,14 +670,23 @@ async fn run_pass(
         .filter_map(|t| t.content_hash.as_deref())
         .collect();
 
-    // Drop holdings for files that no longer exist on this machine
-    if let Ok(server_holdings) = client.device_holdings().await {
-        let stale: Vec<String> = server_holdings
-            .into_iter()
-            .filter(|h| !local_hashes.contains(h.as_str()))
-            .collect();
-        if !stale.is_empty() {
-            let _ = client.forget_holdings(&stale).await;
+    // Drop holdings for files that no longer exist on this machine.
+    //
+    // Only once everything here has a hash. The comparison is made of content hashes, so a file
+    // that is present but not yet hashed is indistinguishable from one that is gone — reconciling
+    // mid-hash would forget a perfectly good holding and re-report it on the next pass, for ever.
+    // `remaining` is exactly that count.
+    if summary.remaining == 0 {
+        if let Ok(server_holdings) = client.device_holdings().await {
+            let stale: Vec<String> = server_holdings
+                .into_iter()
+                .filter(|h| !local_hashes.contains(h.as_str()))
+                .collect();
+            if !stale.is_empty() {
+                // Durably: this is the path that repairs drift, and a repair lost to a timeout
+                // leaves the drift exactly where it was.
+                let _ = client.forget_holdings_durably(&stale).await;
+            }
         }
     }
 
