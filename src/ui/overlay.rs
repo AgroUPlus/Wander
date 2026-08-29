@@ -79,7 +79,7 @@ pub const SETUP_CHOICES: &[(&str, &str)] = &[
     ),
 ];
 
-fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme) {
+fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme, glyphs: GlyphSet) {
     let width = (area.width * 4 / 5).clamp(50.min(area.width), 80);
     let height = 22.min(area.height);
     let rect = centered(area, width, height);
@@ -104,12 +104,13 @@ fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme) 
         "╚█████╔╝██║  ██║██║ ╚████║██████╔╝███████╗██║  ██║",
     ];
 
+    let thunder = glyphs.icon(Icon::Thunder);
     let mut lines = Vec::new();
     for logo_line in ascii_logo {
         lines.push(Line::from(Span::styled(logo_line, theme.title())));
     }
     lines.push(Line::from(vec![
-        Span::styled("⚡ MISTRAL VIBE QUICKSTART ", theme.playing()),
+        Span::styled(format!("{thunder} MISTRAL VIBE QUICKSTART "), theme.playing()),
         Span::styled("•  Step 1 of 3: Choose Audio Source", theme.dim()),
     ]));
     lines.push(Line::from(""));
@@ -460,7 +461,7 @@ pub fn draw(frame: &mut Frame, area: Rect, overlay: &Overlay, theme: &Theme, gly
         Overlay::Share(state) => draw_share(frame, area, state, theme),
         Overlay::Playlist(state) => draw_playlist(frame, area, state, theme),
         Overlay::Palette(state) => draw_palette(frame, area, state, theme, glyphs),
-        Overlay::Setup(state) => draw_setup(frame, area, state, theme),
+        Overlay::Setup(state) => draw_setup(frame, area, state, theme, glyphs),
         Overlay::Sync(state) => draw_sync(frame, area, state, theme),
     }
 }

@@ -207,6 +207,50 @@ impl SyncClient {
         Ok(count)
     }
 
+    /// Forgets holdings this device no longer has.
+    pub async fn forget_holdings(&self, hashes: &[String]) -> Result<i64> {
+        if hashes.is_empty() {
+            return Ok(0);
+        }
+        let mutation = "mutation Forget($userId: String!, $deviceId: String!, $hashes: [String!]!) { \
+                        forgetHoldings(userId: $userId, deviceId: $deviceId, hashes: $hashes) }";
+        let data = self
+            .graphql(
+                mutation,
+                json!({
+                    "userId": self.username,
+                    "deviceId": self.device_id,
+                    "hashes": hashes,
+                }),
+            )
+            .await?;
+        let count = data
+            .get("forgetHoldings")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        Ok(count)
+    }
+
+    /// What Agro currently believes this device holds.
+    pub async fn device_holdings(&self) -> Result<Vec<String>> {
+        let query = "query Holdings($userId: String!, $deviceId: String!) { \
+                     deviceHoldings(userId: $userId, deviceId: $deviceId) }";
+        let data = self
+            .graphql(
+                query,
+                json!({
+                    "userId": self.username,
+                    "deviceId": self.device_id,
+                }),
+            )
+            .await?;
+        let holdings = data
+            .get("deviceHoldings")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        Ok(serde_json::from_value(holdings).unwrap_or_default())
+    }
+
     /// What another of this account's devices holds that this machine lacks.
     ///
     /// The server decides, matching on the recording rather than the bytes, so a different rip of

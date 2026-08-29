@@ -50,8 +50,9 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .filter(|o| matches!(o.status, OperationStatus::Failed(_)))
         .count();
 
+    let thunder = app.config.glyphs.icon(crate::ui::glyphs::Icon::Thunder);
     let summary_line = Line::from(vec![
-        Span::styled("⚡ Active Operations: ", theme.title()),
+        Span::styled(format!("{thunder} Active Operations: "), theme.title()),
         Span::styled(format!("{active} running  •  "), theme.selected()),
         Span::styled(format!("{completed} completed  •  "), theme.dim()),
         Span::styled(
@@ -97,6 +98,7 @@ fn draw_operations_list(
         return;
     }
 
+    let thunder = app.config.glyphs.icon(crate::ui::glyphs::Icon::Thunder);
     let items: Vec<ListItem> = app
         .operations
         .iter()
@@ -104,7 +106,7 @@ fn draw_operations_list(
         .map(|(index, op)| {
             let is_selected = app.focus == Pane::Operations && index == app.operations_sel.index;
             let (status_icon, status_style) = match &op.status {
-                OperationStatus::Running => ("⚡", theme.playing()),
+                OperationStatus::Running => (thunder, theme.playing()),
                 OperationStatus::Completed => ("✓", theme.selected()),
                 OperationStatus::Failed(_) => ("✕", theme.error()),
                 OperationStatus::Cancelled => ("⊘", theme.dim()),

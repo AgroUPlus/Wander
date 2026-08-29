@@ -430,9 +430,10 @@ fn draw_body(
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::Theme) {
+    let thunder = app.config.glyphs.icon(crate::ui::glyphs::Icon::Thunder);
     let active_ops = app.active_operations_count();
     let ops_badge = if active_ops > 0 {
-        format!("  [⚡ {active_ops} active job(s)]")
+        format!("  [{thunder} {active_ops} active job(s)]")
     } else {
         String::new()
     };
@@ -448,7 +449,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::T
         } else {
             theme.selected()
         };
-        (format!("⚡ {single_line}{ops_badge}"), st)
+        (format!("{thunder} {single_line}{ops_badge}"), st)
     } else {
         let radio_active = app.player.queue.lock().unwrap().radio;
         let radio_badge = if radio_active {
