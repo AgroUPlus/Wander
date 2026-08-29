@@ -57,30 +57,59 @@ fn adopt_legacy(target: &PathBuf, legacy: impl FnOnce() -> Option<PathBuf>) {
     let _ = std::fs::rename(&legacy, target);
 }
 
+/// Runs keyring work on a plain OS thread, away from any async runtime.
+///
+/// The Secret Service backend talks D-Bus asynchronously and starts its own runtime to do it
+/// behind a synchronous API. Called from inside Tokio — which is where all of these are called
+/// from, `build_remote` on startup among them — that is an immediate
+/// "Cannot start a runtime from within a runtime" panic, so Wander aborted on launch on any
+/// machine that actually had a password in the keyring.
+///
+/// `spawn_blocking` would not help: its threads still carry the runtime context that the check
+/// looks at. A thread of our own carries none, which is the whole point.
+///
+/// Blocking the caller is acceptable here. These run at startup and from the settings panel, they
+/// take milliseconds, and the alternative is making three call sites async to save nothing.
+fn off_runtime<T, F>(work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    std::thread::spawn(work)
+        .join()
+        .map_err(|_| anyhow::anyhow!("the keyring thread panicked"))?
+}
+
 /// Read a password from the OS keyring, falling back to the old service name.
 ///
 /// Keyring entries cannot be renamed in place, so the old one is read and
 /// re-stored under the new name the first time it is needed.
 pub fn keyring_password(username: &str) -> Result<String> {
-    let entry = keyring::Entry::new(APP_NAME, username).context("opening keyring entry")?;
-    if let Ok(password) = entry.get_password() {
-        return Ok(password);
-    }
+    let username = username.to_string();
+    off_runtime(move || {
+        let entry = keyring::Entry::new(APP_NAME, &username).context("opening keyring entry")?;
+        if let Ok(password) = entry.get_password() {
+            return Ok(password);
+        }
 
-    let legacy = keyring::Entry::new(LEGACY_NAME, username).context("opening keyring entry")?;
-    let password = legacy
-        .get_password()
-        .context("no password in config and none found in the OS keyring")?;
-    // Best effort: if this fails the fallback above still works next time.
-    let _ = entry.set_password(&password);
-    Ok(password)
+        let legacy = keyring::Entry::new(LEGACY_NAME, &username).context("opening keyring entry")?;
+        let password = legacy
+            .get_password()
+            .context("no password in config and none found in the OS keyring")?;
+        // Best effort: if this fails the fallback above still works next time.
+        let _ = entry.set_password(&password);
+        Ok(password)
+    })
 }
 
 pub fn store_keyring_password(username: &str, password: &str) -> Result<()> {
-    keyring::Entry::new(APP_NAME, username)
-        .context("opening keyring entry")?
-        .set_password(password)
-        .context("storing the password in the OS keyring")
+    let (username, password) = (username.to_string(), password.to_string());
+    off_runtime(move || {
+        keyring::Entry::new(APP_NAME, &username)
+            .context("opening keyring entry")?
+            .set_password(&password)
+            .context("storing the password in the OS keyring")
+    })
 }
 
 /// Forget the stored password, so the settings panel can undo a mistake.
@@ -88,13 +117,16 @@ pub fn store_keyring_password(username: &str, password: &str) -> Result<()> {
 /// The legacy entry goes too; leaving it would let the fallback in
 /// [`keyring_password`] silently resurrect the password on the next launch.
 pub fn delete_keyring_password(username: &str) -> Result<()> {
-    if let Ok(entry) = keyring::Entry::new(APP_NAME, username) {
-        let _ = entry.delete_credential();
-    }
-    if let Ok(entry) = keyring::Entry::new(LEGACY_NAME, username) {
-        let _ = entry.delete_credential();
-    }
-    Ok(())
+    let username = username.to_string();
+    off_runtime(move || {
+        if let Ok(entry) = keyring::Entry::new(APP_NAME, &username) {
+            let _ = entry.delete_credential();
+        }
+        if let Ok(entry) = keyring::Entry::new(LEGACY_NAME, &username) {
+            let _ = entry.delete_credential();
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
