@@ -21,7 +21,12 @@ pub async fn download_archive_item(
     let album_dir = target_dir.join(sanitize_filename(&item.title));
     tokio::fs::create_dir_all(&album_dir)
         .await
-        .with_context(|| format!("Failed to create download directory {}", album_dir.display()))?;
+        .with_context(|| {
+            format!(
+                "Failed to create download directory {}",
+                album_dir.display()
+            )
+        })?;
 
     for (index, file) in files.iter().enumerate() {
         let url = file.stream_url(&item.identifier);

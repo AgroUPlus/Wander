@@ -266,12 +266,7 @@ impl App {
     pub(crate) fn focused_songs(&self) -> (Vec<Song>, usize) {
         match self.focus {
             Pane::Queue => (
-                self.player
-                    .queue
-                    .lock()
-                    .unwrap()
-                    .songs()
-                    .to_vec(),
+                self.player.queue.lock().unwrap().songs().to_vec(),
                 self.queue_sel.index,
             ),
             Pane::Artists | Pane::ArtistAlbums => (self.artist_songs.clone(), 0),

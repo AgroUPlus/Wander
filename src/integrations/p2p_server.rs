@@ -44,75 +44,21 @@ pub struct P2PServer {
 
 impl P2PServer {
     pub fn spawn(port: u16, index: P2PTrackIndex) -> Self {
-        let server = Self { port, index: index.clone() };
+        let server = Self {
+            port,
+            index: index.clone(),
+        };
         tokio::spawn(async move {
             let addr = format!("0.0.0.0:{port}");
             let Ok(listener) = TcpListener::bind(&addr).await else {
                 return;
             };
             loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
+                let Ok((socket, _)) = listener.accept().await else {
                     continue;
                 };
                 let index = index.clone();
-                tokio::spawn(async move {
-                    let mut buffer = [0u8; 4096];
-                    let Ok(n) = socket.read(&mut buffer).await else {
-                        return;
-                    };
-                    let request = String::from_utf8_lossy(&buffer[..n]);
-                    let mut lines = request.lines();
-                    let Some(first_line) = lines.next() else {
-                        return;
-                    };
-                    let parts: Vec<&str> = first_line.split_whitespace().collect();
-                    if parts.len() < 2 {
-                        return;
-                    }
-                    let method = parts[0];
-                    let path = parts[1];
-
-                    if method == "GET" && path == "/p2p/ping" {
-                        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong";
-                        let _ = socket.write_all(response.as_bytes()).await;
-                        return;
-                    }
-
-                    if method == "GET" && path.starts_with("/p2p/fetch/") {
-                        let hash = path.trim_start_matches("/p2p/fetch/").split('?').next().unwrap_or("");
-                        if let Some(file_path) = index.get_path(hash) {
-                            if let Ok(mut file) = tokio::fs::File::open(&file_path).await {
-                                if let Ok(meta) = file.metadata().await {
-                                    let len = meta.len();
-                                    let header = format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
-                                    );
-                                    if socket.write_all(header.as_bytes()).await.is_ok() {
-                                        let mut file_buf = [0u8; 64 * 1024];
-                                        loop {
-                                            match file.read(&mut file_buf).await {
-                                                Ok(0) => break,
-                                                Ok(bytes_read) => {
-                                                    if socket.write_all(&file_buf[..bytes_read]).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                                Err(_) => break,
-                                            }
-                                        }
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-                        let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found";
-                        let _ = socket.write_all(not_found.as_bytes()).await;
-                        return;
-                    }
-
-                    let bad_req = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request";
-                    let _ = socket.write_all(bad_req.as_bytes()).await;
-                });
+                tokio::spawn(handle_connection(socket, index));
             }
         });
         server
@@ -121,6 +67,84 @@ impl P2PServer {
     pub fn port(&self) -> u16 {
         self.port
     }
+}
+
+/// Reads one request off the socket and answers it. Any malformed or unknown request gets a
+/// response rather than a dropped connection — a peer that is told 400 stops waiting.
+async fn handle_connection(mut socket: tokio::net::TcpStream, index: P2PTrackIndex) {
+    let mut buffer = [0u8; 4096];
+    let Ok(n) = socket.read(&mut buffer).await else {
+        return;
+    };
+    let request = String::from_utf8_lossy(&buffer[..n]);
+    let Some((method, path)) = parse_request_line(&request) else {
+        return;
+    };
+
+    if method == "GET" && path == "/p2p/ping" {
+        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\npong";
+        let _ = socket.write_all(response.as_bytes()).await;
+        return;
+    }
+
+    if method == "GET" && path.starts_with("/p2p/fetch/") {
+        let hash = path
+            .trim_start_matches("/p2p/fetch/")
+            .split('?')
+            .next()
+            .unwrap_or("");
+        if let Some(file_path) = index.get_path(hash) {
+            if serve_file(&mut socket, &file_path).await {
+                return;
+            }
+        }
+        let not_found =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nNot Found";
+        let _ = socket.write_all(not_found.as_bytes()).await;
+        return;
+    }
+
+    let bad_req =
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request";
+    let _ = socket.write_all(bad_req.as_bytes()).await;
+}
+
+/// Splits the method and path out of the request line, or [`None`] if there isn't one.
+fn parse_request_line(request: &str) -> Option<(&str, &str)> {
+    let first_line = request.lines().next()?;
+    let mut parts = first_line.split_whitespace();
+    Some((parts.next()?, parts.next()?))
+}
+
+/// Streams a file back with its length. Returns whether the response was started — a caller that
+/// gets `false` still owes the peer a 404, since nothing has been written yet.
+async fn serve_file(socket: &mut tokio::net::TcpStream, file_path: &std::path::Path) -> bool {
+    let Ok(mut file) = tokio::fs::File::open(file_path).await else {
+        return false;
+    };
+    let Ok(meta) = file.metadata().await else {
+        return false;
+    };
+    let len = meta.len();
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+    );
+    if socket.write_all(header.as_bytes()).await.is_err() {
+        return true;
+    }
+    let mut file_buf = [0u8; 64 * 1024];
+    loop {
+        match file.read(&mut file_buf).await {
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                if socket.write_all(&file_buf[..bytes_read]).await.is_err() {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    true
 }
 
 /// Streams an audio file chunk-by-chunk to Agro's Ephemeral Relay endpoint.
@@ -134,7 +158,10 @@ pub async fn send_relay_stream(
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = reqwest::Body::wrap_stream(stream);
     let client = reqwest::Client::new();
-    let url = format!("{}/api/v1/relay/{session_id}/send", server.trim_end_matches('/'));
+    let url = format!(
+        "{}/api/v1/relay/{session_id}/send",
+        server.trim_end_matches('/')
+    );
     let res = client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -150,42 +177,43 @@ pub async fn send_relay_stream(
         let detail = res.text().await.unwrap_or_default();
         anyhow::bail!("relay send refused: HTTP {status} {detail}");
     }
-    if res.status().is_success() {
-        Ok(())
-    } else {
-        anyhow::bail!("relay send failed with status: {}", res.status())
-    }
+    Ok(())
 }
 
 /// Helper to detect local network IP address for P2P registration.
 pub fn detect_local_ip() -> Option<String> {
-    // 1. Try local LAN targets first to bind to the LAN interface (e.g. 192.168.x.x)
-    for target in &["192.168.1.1:80", "192.168.0.1:80", "10.0.0.1:80", "192.168.1.254:80"] {
-        if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
-            if socket.connect(target).is_ok() {
-                if let Ok(addr) = socket.local_addr() {
-                    let ip = addr.ip();
-                    if !ip.is_loopback() && !ip.is_unspecified() {
-                        let ip_str = ip.to_string();
-                        // Ignore Tailscale (100.x.x.x) and Docker (172.17/18) when on LAN
-                        if !ip_str.starts_with("100.") && !ip_str.starts_with("172.17.") && !ip_str.starts_with("172.18.") {
-                            return Some(ip_str);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Try local LAN targets first so we bind to the LAN interface (e.g. 192.168.x.x), and only
+    // fall back to the public route when none of them answer.
+    const LAN_TARGETS: [&str; 4] = [
+        "192.168.1.1:80",
+        "192.168.0.1:80",
+        "10.0.0.1:80",
+        "192.168.1.254:80",
+    ];
+    LAN_TARGETS
+        .iter()
+        .find_map(|target| route_source_ip(target).filter(|ip| is_lan_candidate(ip)))
+        .or_else(|| route_source_ip("8.8.8.8:80"))
+}
 
-    // 2. Fallback to public route
+/// The local address the OS would use to reach `target`, if it is a usable one.
+///
+/// Nothing is sent: connecting a UDP socket only picks the route.
+fn route_source_ip(target: &str) -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
+    socket.connect(target).ok()?;
     let ip = socket.local_addr().ok()?.ip();
     if ip.is_loopback() || ip.is_unspecified() {
         None
     } else {
         Some(ip.to_string())
     }
+}
+
+/// Ignores Tailscale (100.x) and Docker (172.17/18) addresses, which are reachable from here but
+/// not from the peer we are advertising ourselves to.
+fn is_lan_candidate(ip: &str) -> bool {
+    !ip.starts_with("100.") && !ip.starts_with("172.17.") && !ip.starts_with("172.18.")
 }
 
 #[cfg(test)]
@@ -208,7 +236,11 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let client = reqwest::Client::new();
-        if let Ok(res) = client.get(format!("http://127.0.0.1:{port}/p2p/ping")).send().await {
+        if let Ok(res) = client
+            .get(format!("http://127.0.0.1:{port}/p2p/ping"))
+            .send()
+            .await
+        {
             assert_eq!(res.status(), 200);
             let text = res.text().await.unwrap();
             assert_eq!(text, "pong");

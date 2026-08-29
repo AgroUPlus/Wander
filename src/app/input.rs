@@ -500,9 +500,13 @@ impl App {
                             handoff.artist_name,
                             handoff.position_ms / 1000
                         ));
-                        self.player.send(PlayerCommand::SeekTo(std::time::Duration::from_millis(handoff.position_ms as u64)));
+                        self.player
+                            .send(PlayerCommand::SeekTo(std::time::Duration::from_millis(
+                                handoff.position_ms as u64,
+                            )));
                     } else {
-                        self.status_message = Some("No active playback stream on other Agro devices".into());
+                        self.status_message =
+                            Some("No active playback stream on other Agro devices".into());
                     }
                 }
             }

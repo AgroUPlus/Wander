@@ -237,7 +237,13 @@ pub fn draw_albums(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
     let albums: Vec<Line> = app
         .albums
         .iter()
-        .map(|a| Line::from(format!("{} — {}", a.artist.as_deref().unwrap_or("Unknown"), a.name)))
+        .map(|a| {
+            Line::from(format!(
+                "{} — {}",
+                a.artist.as_deref().unwrap_or("Unknown"),
+                a.name
+            ))
+        })
         .collect();
     let glyphs = app.config.glyphs;
     let songs: Vec<Line> = app

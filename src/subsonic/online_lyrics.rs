@@ -126,7 +126,11 @@ pub async fn fetch_online_lyrics(
     const USER_AGENT: &str = "wander-tui/0.1 (https://github.com/Kolbxyz/Wander; music player)";
 
     let get_url = build_url(&format!("{base_url}/api/get"), &query);
-    if let Ok(resp) = http.get(&get_url).header("User-Agent", USER_AGENT).send().await
+    if let Ok(resp) = http
+        .get(&get_url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
         && resp.status().is_success()
         && let Ok(data) = resp.json::<LrclibResponse>().await
         && let Some(set) = data.to_lyric_set()
@@ -142,7 +146,11 @@ pub async fn fetch_online_lyrics(
     }
     let search_url = build_url(&search_endpoint, &search_query);
 
-    if let Ok(resp) = http.get(&search_url).header("User-Agent", USER_AGENT).send().await
+    if let Ok(resp) = http
+        .get(&search_url)
+        .header("User-Agent", USER_AGENT)
+        .send()
+        .await
         && resp.status().is_success()
         && let Ok(results) = resp.json::<Vec<LrclibResponse>>().await
     {
@@ -162,7 +170,11 @@ pub async fn fetch_online_lyrics(
         }
         let clean_url = build_url(&search_endpoint, &clean_query);
 
-        if let Ok(resp) = http.get(&clean_url).header("User-Agent", USER_AGENT).send().await
+        if let Ok(resp) = http
+            .get(&clean_url)
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
             && resp.status().is_success()
             && let Ok(results) = resp.json::<Vec<LrclibResponse>>().await
         {

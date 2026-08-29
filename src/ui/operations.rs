@@ -39,14 +39,29 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
 
     let active = app.active_operations_count();
-    let completed = app.operations.iter().filter(|o| o.status == OperationStatus::Completed).count();
-    let failed = app.operations.iter().filter(|o| matches!(o.status, OperationStatus::Failed(_))).count();
+    let completed = app
+        .operations
+        .iter()
+        .filter(|o| o.status == OperationStatus::Completed)
+        .count();
+    let failed = app
+        .operations
+        .iter()
+        .filter(|o| matches!(o.status, OperationStatus::Failed(_)))
+        .count();
 
     let summary_line = Line::from(vec![
         Span::styled("⚡ Active Operations: ", theme.title()),
         Span::styled(format!("{active} running  •  "), theme.selected()),
         Span::styled(format!("{completed} completed  •  "), theme.dim()),
-        Span::styled(format!("{failed} failed  │  "), if failed > 0 { theme.error() } else { theme.dim() }),
+        Span::styled(
+            format!("{failed} failed  │  "),
+            if failed > 0 {
+                theme.error()
+            } else {
+                theme.dim()
+            },
+        ),
         Span::styled("[c] Cancel Selected   ", theme.playing()),
         Span::styled("[x] Clear Finished", theme.dim()),
     ]);
@@ -54,7 +69,13 @@ fn draw_summary(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(Paragraph::new(summary_line), inner);
 }
 
-fn draw_operations_list(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
+fn draw_operations_list(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    theme: &Theme,
+    hits: &mut Hits,
+) {
     let block = Block::default()
         .title(" Operations & Downloads ")
         .borders(Borders::ALL)
@@ -121,7 +142,14 @@ fn draw_operations_list(frame: &mut Frame, area: Rect, app: &mut App, theme: &Th
                 Span::styled(if is_selected { "❯ " } else { "  " }, theme.title()),
                 Span::styled(status_icon, status_style),
                 Span::styled(badge, theme.dim()),
-                Span::styled(title_padded, if is_selected { theme.selected() } else { theme.base() }),
+                Span::styled(
+                    title_padded,
+                    if is_selected {
+                        theme.selected()
+                    } else {
+                        theme.base()
+                    },
+                ),
                 Span::styled(detail_padded, theme.dim()),
                 Span::styled(format!(" {:<16} ", progress_str), status_style),
                 Span::styled(duration_str, theme.dim()),
@@ -168,7 +196,10 @@ fn draw_notification_log(frame: &mut Frame, area: Rect, app: &App, theme: &Theme
 
     if app.notifications.is_empty() {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(" No notifications recorded yet.", theme.dim()))),
+            Paragraph::new(Line::from(Span::styled(
+                " No notifications recorded yet.",
+                theme.dim(),
+            ))),
             inner,
         );
         return;
@@ -191,7 +222,10 @@ fn draw_notification_log(frame: &mut Frame, area: Rect, app: &App, theme: &Theme
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {} ", icon), style),
-                Span::styled(format!("{:<60} ", crate::ui::widgets::truncate(&n.message, 60)), style),
+                Span::styled(
+                    format!("{:<60} ", crate::ui::widgets::truncate(&n.message, 60)),
+                    style,
+                ),
                 Span::styled(time_str, theme.dim()),
             ]))
         })

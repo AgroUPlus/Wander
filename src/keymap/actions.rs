@@ -125,7 +125,9 @@ impl Action {
         use Action::*;
         match self {
             TogglePause | Stop | NextTrack | PrevTrack | SeekForward | SeekBackward | VolumeUp
-            | VolumeDown | ToggleRepeat | ToggleShuffle | ToggleRadio | AgroTransferPlayback => Category::Playback,
+            | VolumeDown | ToggleRepeat | ToggleShuffle | ToggleRadio | AgroTransferPlayback => {
+                Category::Playback
+            }
             NextTab | PrevTab | TabBack | Tab(_) | Up | Down | PageUp | PageDown | Top | Bottom
             | Left | Right | FocusNext | FocusPrev | Confirm | Cancel => Category::Navigation,
             LibraryModeNext | LibraryModePrev | JumpToArtist | JumpToAlbum | ToggleStar
@@ -134,8 +136,8 @@ impl Action {
             AddToQueue | PlayNext | RemoveFromQueue | ClearQueue | MoveTrackUp | MoveTrackDown
             | UndoQueue => Category::Queue,
             ToggleQueuePane | ToggleCoverPane | ToggleLyricsPane | ToggleVisualiser
-            | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight | ResizePaneUp
-            | ResizePaneDown => Category::Panels,
+            | CycleVisualiser | ToggleFocusMode | ResizePaneLeft | ResizePaneRight
+            | ResizePaneUp | ResizePaneDown => Category::Panels,
             OpenPalette => Category::Navigation,
             Quit | Refresh | ToggleHelp => Category::Misc,
         }

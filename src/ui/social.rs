@@ -16,8 +16,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
 use super::widgets::truncate;
 use super::{Hits, Region};
-use crate::app::types::Pane;
 use crate::app::App;
+use crate::app::types::Pane;
 use crate::theme::Theme;
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut Hits) {
@@ -33,7 +33,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut 
         let help = vec![
             Line::from(Span::styled(
                 "Nothing here yet.",
-                Style::default().fg(theme.foreground.0).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.foreground.0)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -54,8 +56,8 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut 
 
     // Friends on the left because that is the pane the cursor lives in; everything else reads to
     // the right of it.
-    let columns = Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
-        .split(inner);
+    let columns =
+        Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)]).split(inner);
     draw_friends(frame, columns[0], app, theme, hits);
 
     let rows = Layout::vertical([
@@ -77,12 +79,18 @@ fn draw_friends(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &
     for (index, friend) in app.friends.iter().enumerate() {
         let selected = focused && index == app.social_sel;
         let style = if selected {
-            Style::default().fg(theme.accent.0).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.accent.0)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.foreground.0)
         };
         lines.push(Line::from(Span::styled(
-            format!("{} {}", if selected { "▸" } else { " " }, truncate(friend.label(), width)),
+            format!(
+                "{} {}",
+                if selected { "▸" } else { " " },
+                truncate(friend.label(), width)
+            ),
             style,
         )));
         // Presence sits under the name rather than beside it: a track and an artist do not fit on
@@ -96,8 +104,16 @@ fn draw_friends(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &
         }
         if area.height > 0 {
             hits.push(
-                Rect { x: area.x, y: area.y + index as u16, width: area.width, height: 1 },
-                Region::Row { pane: Pane::Social, index },
+                Rect {
+                    x: area.x,
+                    y: area.y + index as u16,
+                    width: area.width,
+                    height: 1,
+                },
+                Region::Row {
+                    pane: Pane::Social,
+                    index,
+                },
             );
         }
     }
@@ -139,7 +155,9 @@ fn draw_inbox(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         // Unread is the only thing here that gets the accent. A list where every row is emphasised
         // emphasises nothing, and "there is something you have not seen" is exactly a status.
         let style = if drop.is_unread() {
-            Style::default().fg(theme.accent.0).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.accent.0)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.foreground.0)
         };
@@ -209,19 +227,28 @@ fn draw_recap(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if let Some(anthem) = app.recap.anthem.as_deref() {
         lines.push(Line::from(vec![
             Span::styled("Anthem  ", Style::default().fg(theme.border.0)),
-            Span::styled(truncate(anthem, width.saturating_sub(8)), Style::default().fg(theme.foreground.0)),
+            Span::styled(
+                truncate(anthem, width.saturating_sub(8)),
+                Style::default().fg(theme.foreground.0),
+            ),
         ]));
     }
     if let Some(setter) = app.recap.trendsetter.as_deref() {
         lines.push(Line::from(vec![
             Span::styled("First   ", Style::default().fg(theme.border.0)),
-            Span::styled(truncate(setter, width.saturating_sub(8)), Style::default().fg(theme.foreground.0)),
+            Span::styled(
+                truncate(setter, width.saturating_sub(8)),
+                Style::default().fg(theme.foreground.0),
+            ),
         ]));
     }
     for pair in app.recap.matrix.iter().take(3) {
         lines.push(Line::from(vec![
             Span::styled("Match   ", Style::default().fg(theme.border.0)),
-            Span::styled(truncate(pair, width.saturating_sub(8)), Style::default().fg(theme.foreground.0)),
+            Span::styled(
+                truncate(pair, width.saturating_sub(8)),
+                Style::default().fg(theme.foreground.0),
+            ),
         ]));
     }
     if lines.is_empty() {

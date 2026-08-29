@@ -30,7 +30,11 @@ pub struct ShareDomain {
 
 impl ShareDomain {
     /// The link to hand the user, minting a short UID via Agro when paired.
-    pub async fn rewrite_async(&self, url: &str, agro: Option<&crate::integrations::agro::AgroClient>) -> String {
+    pub async fn rewrite_async(
+        &self,
+        url: &str,
+        agro: Option<&crate::integrations::agro::AgroClient>,
+    ) -> String {
         if self.domain.trim().is_empty() {
             return url.to_string();
         }

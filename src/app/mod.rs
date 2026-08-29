@@ -15,15 +15,15 @@ use crate::ui::{Hits, Region};
 
 pub(crate) mod features;
 pub(crate) mod input;
-pub(crate) mod layout;
 pub(crate) mod jam;
-pub(crate) mod social;
+pub(crate) mod layout;
 mod loading;
 pub(crate) mod navigation;
 pub(crate) mod overlays;
 pub(crate) mod settings;
-mod sync;
+pub(crate) mod social;
 pub(crate) mod storage;
+mod sync;
 #[cfg(test)]
 mod tests;
 pub mod types;
@@ -423,11 +423,16 @@ impl App {
     }
 
     pub fn has_active_operations(&self) -> bool {
-        self.operations.iter().any(|op| op.status == OperationStatus::Running)
+        self.operations
+            .iter()
+            .any(|op| op.status == OperationStatus::Running)
     }
 
     pub fn active_operations_count(&self) -> usize {
-        self.operations.iter().filter(|op| op.status == OperationStatus::Running).count()
+        self.operations
+            .iter()
+            .filter(|op| op.status == OperationStatus::Running)
+            .count()
     }
 
     pub fn available_tabs(&self) -> Vec<Tab> {
@@ -459,7 +464,12 @@ impl App {
     }
 
     pub fn add_operation(&mut self, op: Operation) {
-        if let Some(existing) = self.operations.iter_mut().rev().find(|o| o.id == op.id && o.status == OperationStatus::Running) {
+        if let Some(existing) = self
+            .operations
+            .iter_mut()
+            .rev()
+            .find(|o| o.id == op.id && o.status == OperationStatus::Running)
+        {
             existing.details = op.details;
             existing.started_at = op.started_at;
             return;
@@ -469,7 +479,12 @@ impl App {
     }
 
     pub fn update_operation_progress(&mut self, id: &str, progress: f32, details: Option<String>) {
-        if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id && o.status == OperationStatus::Running) {
+        if let Some(op) = self
+            .operations
+            .iter_mut()
+            .rev()
+            .find(|o| o.id == id && o.status == OperationStatus::Running)
+        {
             op.progress = Some(progress);
             if details.is_some() {
                 op.details = details;
@@ -478,7 +493,12 @@ impl App {
     }
 
     pub fn finish_operation(&mut self, id: &str, status: OperationStatus) {
-        if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id && o.status == OperationStatus::Running) {
+        if let Some(op) = self
+            .operations
+            .iter_mut()
+            .rev()
+            .find(|o| o.id == id && o.status == OperationStatus::Running)
+        {
             op.status = status;
         } else if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id) {
             op.status = status;
@@ -497,7 +517,8 @@ impl App {
     }
 
     pub fn clear_completed_operations(&mut self) {
-        self.operations.retain(|op| op.status == OperationStatus::Running);
+        self.operations
+            .retain(|op| op.status == OperationStatus::Running);
         self.operations_sel.clamp(self.operations.len());
         if !self.has_active_operations() && self.tab == Tab::Operations {
             self.go_to_tab(Tab::Home);

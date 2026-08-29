@@ -519,12 +519,16 @@ impl App {
             let (files, cover_art) = match cached {
                 Some(files) => (files, None),
                 None => {
-                    match crate::plugins::archive::api::item_files_and_cover(&http, &item.identifier)
-                        .await
+                    match crate::plugins::archive::api::item_files_and_cover(
+                        &http,
+                        &item.identifier,
+                    )
+                    .await
                     {
                         Ok(res) => res,
                         Err(err) => {
-                            let _ = loads.send(LoadEvent::ArchiveStreamReady(Err(format!("{err:#}"))));
+                            let _ =
+                                loads.send(LoadEvent::ArchiveStreamReady(Err(format!("{err:#}"))));
                             return;
                         }
                     }
@@ -574,13 +578,14 @@ impl App {
             return;
         };
 
-        let target_dir = self.online_download_dir(
-            self.config.plugins.archive.download_dir.clone(),
-        );
+        let target_dir = self.online_download_dir(self.config.plugins.archive.download_dir.clone());
 
         self.archive_plugin.working = true;
         let title_short = crate::ui::widgets::truncate(&item.title, 35);
-        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.push_notification(
+            NotificationLevel::Info,
+            format!("Started downloading '{title_short}'"),
+        );
         self.add_operation(Operation {
             id: "archive-dl".into(),
             title: item.title.clone(),
@@ -605,7 +610,9 @@ impl App {
             let result = async {
                 let files = match cached {
                     Some(files) => files,
-                    None => crate::plugins::archive::api::item_files(&http, &item.identifier).await?,
+                    None => {
+                        crate::plugins::archive::api::item_files(&http, &item.identifier).await?
+                    }
                 };
                 crate::plugins::archive::downloader::download_archive_item(
                     &http,
@@ -757,8 +764,7 @@ impl App {
             return;
         };
 
-        let target_dir =
-            self.online_download_dir(self.config.plugins.jamendo.download_dir.clone());
+        let target_dir = self.online_download_dir(self.config.plugins.jamendo.download_dir.clone());
         let format =
             crate::plugins::jamendo::JamendoFormat::from_code(&self.config.plugins.jamendo.format);
         let file_name = format!(
@@ -770,7 +776,10 @@ impl App {
 
         self.jamendo_plugin.working = true;
         let title_short = crate::ui::widgets::truncate(&track.name, 35);
-        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.push_notification(
+            NotificationLevel::Info,
+            format!("Started downloading '{title_short}'"),
+        );
         self.add_operation(Operation {
             id: "jamendo-dl".into(),
             title: track.name.clone(),
@@ -874,7 +883,10 @@ impl App {
 
         self.nyaa_plugin.downloading = true;
         let title_short = crate::ui::widgets::truncate(&item.title, 35);
-        self.push_notification(NotificationLevel::Info, format!("Started downloading '{title_short}'"));
+        self.push_notification(
+            NotificationLevel::Info,
+            format!("Started downloading '{title_short}'"),
+        );
         self.add_operation(Operation {
             id: "nyaa-dl".into(),
             title: item.title.clone(),
@@ -890,13 +902,10 @@ impl App {
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
-            let res = crate::plugins::nyaa::downloader::download_nyaa_item(
-                &http,
-                &item,
-                &target_dir,
-            )
-            .await
-            .map_err(|e| format!("{e:#}"));
+            let res =
+                crate::plugins::nyaa::downloader::download_nyaa_item(&http, &item, &target_dir)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
 
             let _ = loads.send(LoadEvent::NyaaDownloadFinished {
                 title: item.title,
@@ -928,12 +937,9 @@ impl App {
                 .map(|p| p.join("stream_cache"))
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp/wander_stream"));
 
-            let download_res = crate::plugins::nyaa::downloader::download_nyaa_item(
-                &http,
-                &item,
-                &cache_dir,
-            )
-            .await;
+            let download_res =
+                crate::plugins::nyaa::downloader::download_nyaa_item(&http, &item, &cache_dir)
+                    .await;
 
             match download_res {
                 Ok(path) => {
@@ -949,16 +955,14 @@ impl App {
                             )));
                         };
                         match crate::plugins::nyaa::downloader::extract_torrent_audio(
-                            &path,
-                            &cache_dir,
-                            &cancel,
-                            report,
+                            &path, &cache_dir, &cancel, report,
                         )
                         .await
                         {
                             Ok(paths) => paths,
                             Err(e) => {
-                                let _ = loads.send(LoadEvent::NyaaStreamReady(Err(format!("{e:#}"))));
+                                let _ =
+                                    loads.send(LoadEvent::NyaaStreamReady(Err(format!("{e:#}"))));
                                 return;
                             }
                         }
@@ -998,16 +1002,17 @@ impl App {
                                 // Cached under the plugin's own prefix, not
                                 // "local:": it plays off disk, but it is not
                                 // part of the user's library.
-                                id: format!(
-                                    "{}{}",
-                                    crate::library::ONLINE_PREFIX,
-                                    p.display()
-                                ),
+                                id: format!("{}{}", crate::library::ONLINE_PREFIX, p.display()),
                                 title: track_title,
-                                album: Some(probed.album.clone().unwrap_or_else(|| item.title.clone())),
+                                album: Some(
+                                    probed.album.clone().unwrap_or_else(|| item.title.clone()),
+                                ),
                                 album_id: None,
                                 artist: Some(
-                                    probed.artist.clone().unwrap_or_else(|| "Nyaa.si".to_string()),
+                                    probed
+                                        .artist
+                                        .clone()
+                                        .unwrap_or_else(|| "Nyaa.si".to_string()),
                                 ),
                                 artist_id: None,
                                 // Points at the cached file itself, which is

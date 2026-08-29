@@ -10,8 +10,8 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use super::widgets::truncate;
 use super::Hits;
+use super::widgets::truncate;
 use crate::app::App;
 use crate::integrations::agro_jam::JamMode;
 use crate::theme::Theme;
@@ -29,7 +29,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
         let help = vec![
             Line::from(Span::styled(
                 "You are not in a jam.",
-                Style::default().fg(theme.foreground.0).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.foreground.0)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
@@ -47,8 +49,12 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
         return;
     };
 
-    let rows = Layout::vertical([Constraint::Length(3), Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
+    let rows = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
 
     // The code first: a jam nobody else can reach is just a playlist.
     let header = vec![
@@ -56,7 +62,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
             Span::styled("code ", Style::default().fg(theme.border.0)),
             Span::styled(
                 jam.code.clone(),
-                Style::default().fg(theme.accent.0).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.accent.0)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("   mode ", Style::default().fg(theme.border.0)),
             Span::styled(jam.mode.label(), Style::default().fg(theme.foreground.0)),
@@ -65,7 +73,11 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
                 Style::default().fg(theme.border.0),
             ),
             Span::styled(
-                if jam.open_to_friends { "   open to friends" } else { "   code only" },
+                if jam.open_to_friends {
+                    "   open to friends"
+                } else {
+                    "   code only"
+                },
                 Style::default().fg(theme.border.0),
             ),
         ]),
@@ -90,14 +102,22 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
                 Span::styled("▶ ", Style::default().fg(theme.accent.0)),
                 Span::styled(
                     truncate(&now.title, width.saturating_sub(28)),
-                    Style::default().fg(theme.foreground.0).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.foreground.0)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
                     format!("  {}  ", truncate(&now.artist, 16)),
                     Style::default().fg(theme.border.0),
                 ),
                 Span::styled(
-                    format!("{}:{:02}/{}:{:02}", elapsed / 60, elapsed % 60, total / 60, total % 60),
+                    format!(
+                        "{}:{:02}/{}:{:02}",
+                        elapsed / 60,
+                        elapsed % 60,
+                        total / 60,
+                        total % 60
+                    ),
                     Style::default().fg(theme.border.0),
                 ),
                 Span::styled(
@@ -127,7 +147,9 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
         for (index, track) in jam.proposals.iter().enumerate() {
             let selected = index == app.jam_sel;
             let style = if selected {
-                Style::default().fg(theme.highlight_fg.0).bg(theme.highlight_bg.0)
+                Style::default()
+                    .fg(theme.highlight_fg.0)
+                    .bg(theme.highlight_bg.0)
             } else {
                 Style::default().fg(theme.foreground.0)
             };
@@ -176,7 +198,10 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, _hits: &mut
         "Enter/v accept   s skip   x remove your own   l leave"
     };
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(keys, Style::default().fg(theme.border.0)))),
+        Paragraph::new(Line::from(Span::styled(
+            keys,
+            Style::default().fg(theme.border.0),
+        ))),
         rows[2],
     );
 }

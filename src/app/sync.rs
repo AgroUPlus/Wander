@@ -8,12 +8,12 @@
 //! the disk and the network for as long as it took, with no way to stop it. Each pass makes
 //! progress and reports what is left.
 
+use crate::app::App;
 use crate::app::types::{
     LoadEvent, NotificationLevel, Operation, OperationKind, OperationStatus, SyncSummary,
 };
-use crate::app::App;
 use crate::integrations::share_link::ShareDomain;
-use crate::integrations::sync::{hash_file, SyncClient, UploadOutcome};
+use crate::integrations::sync::{SyncClient, UploadOutcome, hash_file};
 use crate::ui::overlay::{Overlay, SyncState};
 
 /// How many missing tracks to ask about at once.
@@ -26,7 +26,13 @@ impl App {
         if !agro.is_ready() {
             return None;
         }
-        SyncClient::new(&agro.server, &agro.username, &agro.passphrase, &agro.device_id).ok()
+        SyncClient::new(
+            &agro.server,
+            &agro.username,
+            &agro.passphrase,
+            &agro.device_id,
+        )
+        .ok()
     }
 
     /// Where share links go: Agro's domain if a paired server publishes one, otherwise whatever
@@ -100,7 +106,10 @@ impl App {
                     // A refusal and an unreachable host need different words: one is a credential
                     // to fix, the other is a server to wait for.
                     let text = err.to_string();
-                    if text.contains("Unauthorized") || text.contains("Forbidden") || text.contains("not active") {
+                    if text.contains("Unauthorized")
+                        || text.contains("Forbidden")
+                        || text.contains("not active")
+                    {
                         crate::app::types::AgroStatus::Refused(text)
                     } else {
                         crate::app::types::AgroStatus::Unreachable(text)
@@ -151,7 +160,10 @@ impl App {
             return;
         };
         let Some(local) = self.library_root.as_ref().and_then(|root| root.local()) else {
-            self.push_notification(NotificationLevel::Warning, "No local music folder configured");
+            self.push_notification(
+                NotificationLevel::Warning,
+                "No local music folder configured",
+            );
             return;
         };
 
@@ -175,7 +187,9 @@ impl App {
         let progress_sink = loads.clone();
         tokio::spawn(async move {
             let outcome = run_pass(client, local, config, progress_sink).await;
-            let _ = loads.send(LoadEvent::SyncFinished(outcome.map_err(|e| format!("{e:#}"))));
+            let _ = loads.send(LoadEvent::SyncFinished(
+                outcome.map_err(|e| format!("{e:#}")),
+            ));
         });
     }
 
@@ -185,7 +199,9 @@ impl App {
     /// on this machine, and downloading a copy of something you can already hear is not a feature.
     /// The server decides which of those this is — see [`SyncMode`].
     pub fn check_sync_offers(&mut self) {
-        let Some(client) = self.sync_client() else { return };
+        let Some(client) = self.sync_client() else {
+            return;
+        };
         self.spawn_load(async move {
             let mode = client.sync_mode().await.unwrap_or_default();
             if !mode.offers_downloads() {
@@ -201,7 +217,9 @@ impl App {
     /// Only asked when the server says a local copy is redundant rather than the only one. The
     /// answer populates the Settings row; nothing is deleted without the user choosing to.
     pub fn check_reclaimable(&mut self) {
-        let Some(client) = self.sync_client() else { return };
+        let Some(client) = self.sync_client() else {
+            return;
+        };
         self.spawn_load(async move {
             let mode = client.sync_mode().await.unwrap_or_default();
             if !mode.offers_reclaim() {
@@ -281,7 +299,9 @@ impl App {
             }
             return;
         };
-        let Some(client) = self.sync_client() else { return };
+        let Some(client) = self.sync_client() else {
+            return;
+        };
 
         let Some(Overlay::Sync(state)) = self.overlay.as_mut() else {
             return;
@@ -428,8 +448,12 @@ impl App {
             let _ = agro_client.register_node(petname.as_deref(), None).await;
         });
 
-        let mut messages =
-            crate::integrations::agro_ws::spawn(&agro.server, &agro.passphrase, &agro.device_id, Some(&agro.username));
+        let mut messages = crate::integrations::agro_ws::spawn(
+            &agro.server,
+            &agro.passphrase,
+            &agro.device_id,
+            Some(&agro.username),
+        );
         let loads = self.loads.clone();
         let agro_server = agro.server.clone();
         let agro_passphrase = agro.passphrase.clone();
@@ -454,8 +478,16 @@ impl App {
                     // Said out loud, then the inbox re-read. The frame names the track so the
                     // message can, but it is news about one drop rather than the whole inbox —
                     // acting on it alone would leave the list behind.
-                    LiveMessage::TrackDrop { from, title, artist } => {
-                        let _ = loads.send(LoadEvent::DropArrived { from, title, artist });
+                    LiveMessage::TrackDrop {
+                        from,
+                        title,
+                        artist,
+                    } => {
+                        let _ = loads.send(LoadEvent::DropArrived {
+                            from,
+                            title,
+                            artist,
+                        });
                     }
                     LiveMessage::JamUpdated | LiveMessage::JamNowPlaying => {
                         // The jam lives on the GraphQL client, not the sync client — different
@@ -466,12 +498,17 @@ impl App {
                             }
                         }
                     }
-                    LiveMessage::RelayRequest { session_id, content_hash, .. } => {
+                    LiveMessage::RelayRequest {
+                        session_id,
+                        content_hash,
+                        ..
+                    } => {
                         // Every failure here used to be silent: a hash the index did not know was
                         // ignored without a word, and a refused upload was discarded by `let _ =`.
                         // The device waiting at the other end has no way to tell either of those
                         // from a slow transfer, so it simply timed out having received nothing.
-                        match crate::integrations::p2p_server::GLOBAL_INDEX.get_path(&content_hash) {
+                        match crate::integrations::p2p_server::GLOBAL_INDEX.get_path(&content_hash)
+                        {
                             Some(file_path) => {
                                 let server = agro_server.clone();
                                 let loads = loads.clone();
@@ -484,10 +521,14 @@ impl App {
                                 let token = crate::integrations::agro::cached_token()
                                     .unwrap_or_else(|| agro_passphrase.clone());
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::integrations::p2p_server::send_relay_stream(
-                                        &server, &token, &session_id, file_path,
-                                    )
-                                    .await
+                                    if let Err(error) =
+                                        crate::integrations::p2p_server::send_relay_stream(
+                                            &server,
+                                            &token,
+                                            &session_id,
+                                            file_path,
+                                        )
+                                        .await
                                     {
                                         let _ = loads.send(LoadEvent::Error(format!(
                                             "Relay send failed: {error:#}"
@@ -527,7 +568,12 @@ async fn run_pass(
 
     // ── Hash ────────────────────────────────────────────────────────────────────────────────
     // Loop in batches until all unhashed tracks are hashed, updating progress after each file.
-    let total_to_hash = local.index().tracks.iter().filter(|t| t.content_hash.is_none()).count();
+    let total_to_hash = local
+        .index()
+        .tracks
+        .iter()
+        .filter(|t| t.content_hash.is_none())
+        .count();
     let mut total_hashed_so_far = 0usize;
 
     while total_hashed_so_far < total_to_hash {
@@ -554,10 +600,7 @@ async fn run_pass(
             } else {
                 0.7
             };
-            progress(
-                fraction,
-                format!("Hashing [{cur}/{total_to_hash}] {title}"),
-            );
+            progress(fraction, format!("Hashing [{cur}/{total_to_hash}] {title}"));
 
             let p_clone = path.clone();
             let hash_opt = tokio::task::spawn_blocking(move || hash_file(&p_clone).ok()).await?;
@@ -616,10 +659,7 @@ async fn run_pass(
             }
 
             let fraction = 0.35 + 0.65 * (idx as f32 / total_tracks as f32);
-            progress(
-                fraction,
-                format!("Archiving to server: {}", track.title),
-            );
+            progress(fraction, format!("Archiving to server: {}", track.title));
 
             match client.upload(track).await {
                 Ok(UploadOutcome::Uploaded) => summary.uploaded += 1,

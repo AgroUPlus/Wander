@@ -39,8 +39,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &
 }
 
 fn draw_search_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
-    let splits =
-        Layout::horizontal([Constraint::Min(30), Constraint::Length(28)]).split(area);
+    let splits = Layout::horizontal([Constraint::Min(30), Constraint::Length(28)]).split(area);
 
     let search_focused = app.archive_plugin.editing_query;
     let query_block = Block::default()
@@ -70,7 +69,10 @@ fn draw_search_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
         } else {
             app.archive_plugin.query.clone()
         };
-        (crate::ui::widgets::truncate(&text, input_width), theme.base())
+        (
+            crate::ui::widgets::truncate(&text, input_width),
+            theme.base(),
+        )
     };
 
     frame.render_widget(Paragraph::new(query_text).style(query_style), query_inner);
@@ -97,7 +99,13 @@ fn draw_search_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
     );
 }
 
-fn draw_results_table(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
+fn draw_results_table(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    theme: &Theme,
+    hits: &mut Hits,
+) {
     if app.archive_plugin.searching {
         let loading = vec![
             Line::from(""),

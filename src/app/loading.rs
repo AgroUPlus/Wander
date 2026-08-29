@@ -194,7 +194,11 @@ impl App {
             }
             LoadEvent::ShareDomain(domain) => self.agro_share_domain = domain,
             LoadEvent::AgroStatus(status) => self.agro_status = status,
-            LoadEvent::DropArrived { from, title, artist } => {
+            LoadEvent::DropArrived {
+                from,
+                title,
+                artist,
+            } => {
                 self.status_message = Some(if artist.is_empty() {
                     format!("{from} sent you “{title}”")
                 } else {
@@ -204,7 +208,12 @@ impl App {
                 // shows the thing that was just announced.
                 self.refresh_social();
             }
-            LoadEvent::Social { friends, feed, inbox, recap } => {
+            LoadEvent::Social {
+                friends,
+                feed,
+                inbox,
+                recap,
+            } => {
                 // Both cursors are clamped for the same reason the jam's is: these lists are other
                 // people's, and a friend leaving or a drop being archived elsewhere can shorten
                 // them under a selection that then paints nothing and answers no keys.
@@ -304,7 +313,10 @@ impl App {
                         self.archive_plugin.files.clear();
                     }
                     Err(err) => {
-                        self.push_notification(NotificationLevel::Error, format!("Archive search error: {err}"));
+                        self.push_notification(
+                            NotificationLevel::Error,
+                            format!("Archive search error: {err}"),
+                        );
                     }
                 }
             }
@@ -316,7 +328,10 @@ impl App {
                         self.jamendo_plugin.selection.reset();
                     }
                     Err(err) => {
-                        self.push_notification(NotificationLevel::Error, format!("Jamendo search error: {err}"));
+                        self.push_notification(
+                            NotificationLevel::Error,
+                            format!("Jamendo search error: {err}"),
+                        );
                     }
                 }
             }
@@ -350,7 +365,10 @@ impl App {
                 match result {
                     Ok(songs) => {
                         if songs.is_empty() {
-                            self.push_notification(NotificationLevel::Warning, "No playable audio in this Archive item");
+                            self.push_notification(
+                                NotificationLevel::Warning,
+                                "No playable audio in this Archive item",
+                            );
                             return;
                         }
                         let first_title = songs[0].title.clone();
@@ -364,7 +382,10 @@ impl App {
                         self.push_notification(NotificationLevel::Info, msg);
                     }
                     Err(err) => {
-                        self.push_notification(NotificationLevel::Error, format!("Archive streaming error: {err}"));
+                        self.push_notification(
+                            NotificationLevel::Error,
+                            format!("Archive streaming error: {err}"),
+                        );
                     }
                 }
             }
@@ -394,7 +415,11 @@ impl App {
             LoadEvent::PluginStatus(message) => {
                 self.status_message = Some(message.clone());
                 // Update running operation progress details if any exist
-                if let Some(op) = self.operations.iter_mut().find(|o| o.status == OperationStatus::Running) {
+                if let Some(op) = self
+                    .operations
+                    .iter_mut()
+                    .find(|o| o.status == OperationStatus::Running)
+                {
                     op.details = Some(message);
                 }
             }
@@ -407,7 +432,10 @@ impl App {
                         self.nyaa_plugin.selection.reset();
                     }
                     Err(err) => {
-                        self.push_notification(NotificationLevel::Error, format!("Nyaa search error: {err}"));
+                        self.push_notification(
+                            NotificationLevel::Error,
+                            format!("Nyaa search error: {err}"),
+                        );
                     }
                 }
             }
@@ -417,16 +445,16 @@ impl App {
                 match result {
                     Ok(songs) => {
                         if songs.is_empty() {
-                            self.push_notification(NotificationLevel::Warning, "No audio tracks found to stream");
+                            self.push_notification(
+                                NotificationLevel::Warning,
+                                "No audio tracks found to stream",
+                            );
                             return;
                         }
                         let first_title = songs[0].title.clone();
                         let count = songs.len();
                         self.snapshot_queue();
-                        self.player.send(PlayerCommand::PlayNow {
-                            songs,
-                            index: 0,
-                        });
+                        self.player.send(PlayerCommand::PlayNow { songs, index: 0 });
                         let msg = format!(
                             "Streaming '{}' ({count} track(s) queued in Wander)",
                             crate::ui::widgets::truncate(&first_title, 35)
@@ -434,7 +462,10 @@ impl App {
                         self.push_notification(NotificationLevel::Info, msg);
                     }
                     Err(err) => {
-                        self.push_notification(NotificationLevel::Error, format!("Streaming error: {err}"));
+                        self.push_notification(
+                            NotificationLevel::Error,
+                            format!("Streaming error: {err}"),
+                        );
                     }
                 }
             }

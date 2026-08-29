@@ -12,7 +12,7 @@
 //! The upload protocol is Agro's REST one rather than GraphQL: these are megabytes, and a JSON
 //! envelope would both inflate them and prevent streaming.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -96,7 +96,9 @@ pub enum UploadOutcome {
     AlreadyPresent,
     Uploaded,
     /// Sent as far as it got. The next attempt resumes rather than restarting.
-    Partial { received: u64 },
+    Partial {
+        received: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -137,9 +139,13 @@ impl SyncClient {
     }
 
     async fn try_exchange(&self) -> bool {
-        if let Ok(token) =
-            crate::integrations::agro::exchange_token(&self.server, &self.username, &self.passphrase, &self.device_id)
-                .await
+        if let Ok(token) = crate::integrations::agro::exchange_token(
+            &self.server,
+            &self.username,
+            &self.passphrase,
+            &self.device_id,
+        )
+        .await
         {
             let mut write = self.token.write().await;
             *write = Some(token);
@@ -271,7 +277,11 @@ impl SyncClient {
         Ok(serde_json::from_value(tracks).unwrap_or_default())
     }
 
-    async fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+    async fn graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let url = format!("{}/graphql", self.server);
         let mut auth = self.auth_header().await;
         let mut response = self
@@ -367,7 +377,10 @@ impl SyncClient {
         }
 
         if !begin.status().is_success() {
-            return Err(anyhow!("the server refused the upload ({})", begin.status()));
+            return Err(anyhow!(
+                "the server refused the upload ({})",
+                begin.status()
+            ));
         }
         let begin: serde_json::Value = begin.json().await.context("reading the upload reply")?;
 
@@ -383,12 +396,10 @@ impl SyncClient {
             .get("uploadId")
             .and_then(|s| s.as_str())
             .ok_or_else(|| anyhow!("missing uploadId in server reply"))?;
-        let offset = begin
-            .get("received")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
+        let offset = begin.get("received").and_then(|v| v.as_u64()).unwrap_or(0);
 
-        self.upload_part(upload_id, &track.path, track.size, offset).await
+        self.upload_part(upload_id, &track.path, track.size, offset)
+            .await
     }
 
     async fn upload_part(
@@ -414,10 +425,7 @@ impl SyncClient {
         let auth = self.auth_header().await;
         let response = self
             .http
-            .put(format!(
-                "{}/api/v1/library/upload/{upload_id}",
-                self.server
-            ))
+            .put(format!("{}/api/v1/library/upload/{upload_id}", self.server))
             .header("Authorization", &auth)
             .header("x-agro-offset", offset.to_string())
             .header("Content-Type", "application/octet-stream")
@@ -440,6 +448,118 @@ impl SyncClient {
         }
     }
 
+    /// Asks each peer advertising a LAN address for the file directly.
+    ///
+    /// A peer that is listed but off the network is the common case, not an error, so a refusal
+    /// here just moves on to the next source.
+    async fn fetch_over_lan(&self, track: &MissingTrack) -> Option<reqwest::Response> {
+        let auth = self.auth_header().await;
+        for source in &track.peer_sources {
+            let Some(lan) = &source.lan_address else {
+                continue;
+            };
+            let url = format!("http://{lan}/p2p/fetch/{}", track.content_hash);
+            let Ok(res) = self
+                .http
+                .get(&url)
+                .header("Authorization", &auth)
+                .timeout(Duration::from_secs(4))
+                .send()
+                .await
+            else {
+                continue;
+            };
+            if res.status().is_success() {
+                return Some(res);
+            }
+        }
+        None
+    }
+
+    /// Pulls the file through the server's ephemeral relay, for peers that hold it but are not
+    /// reachable on this network.
+    async fn fetch_over_relay(&self, track: &MissingTrack) -> Option<reqwest::Response> {
+        let peer = track.peer_sources.iter().find(|s| !s.is_server_archive)?;
+        let auth = self.auth_header().await;
+        let session_id = self.open_relay_session(peer, track, &auth).await?;
+        let recv_url = format!("{}/api/v1/relay/{session_id}/receive", self.server);
+        let res = self
+            .http
+            .get(&recv_url)
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .ok()?;
+        res.status().is_success().then_some(res)
+    }
+
+    /// Opens a relay session and returns its id, or [`None`] if the server declined.
+    async fn open_relay_session(
+        &self,
+        peer: &PeerSource,
+        track: &MissingTrack,
+        auth: &str,
+    ) -> Option<String> {
+        let open_url = format!("{}/api/v1/relay/open", self.server);
+        let open_body = json!({
+            "contentHash": track.content_hash,
+            "fromDevice": peer.device_id,
+            "toDevice": self.device_id,
+        });
+        let res = self
+            .http
+            .post(&open_url)
+            .header("Authorization", auth)
+            .json(&open_body)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let val = res.json::<serde_json::Value>().await.ok()?;
+        val.get("sessionId")
+            .and_then(|s| s.as_str())
+            .map(str::to_string)
+    }
+
+    /// Last resort: the copy the server keeps. Retries once behind a refreshed token, since an
+    /// expired one looks exactly like a missing file to the caller otherwise.
+    async fn fetch_from_archive(&self, track: &MissingTrack) -> Result<reqwest::Response> {
+        let fetch_url = format!(
+            "{}/api/v1/library/fetch/{}",
+            self.server, track.content_hash
+        );
+        let mut auth = self.auth_header().await;
+        let mut res = self
+            .http
+            .get(&fetch_url)
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .context("asking the server for the file")?;
+
+        if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
+            auth = self.auth_header().await;
+            res = self
+                .http
+                .get(&fetch_url)
+                .header("Authorization", &auth)
+                .send()
+                .await
+                .context("asking the server for the file")?;
+        }
+
+        if !res.status().is_success() {
+            return Err(anyhow!(
+                "the server would not hand that file over ({})",
+                res.status()
+            ));
+        }
+        Ok(res)
+    }
+
     /// Downloads a file the server holds, into [`dir`], filed by artist and album.
     ///
     /// Streams to a `.part` alongside the destination and renames on success, so an interrupted
@@ -449,107 +569,19 @@ impl SyncClient {
     /// The hash is re-checked against what arrived. A corrupted transfer that kept its name would
     /// be indistinguishable from the real thing forever after.
     pub async fn fetch(&self, track: &MissingTrack, dir: &Path) -> Result<std::path::PathBuf> {
-        let mut p2p_response: Option<reqwest::Response> = None;
-
-        // 1. Try direct LAN P2P transfer if peer has a reachable LAN address
-        for source in &track.peer_sources {
-            if let Some(lan) = &source.lan_address {
-                let p2p_url = format!("http://{lan}/p2p/fetch/{}", track.content_hash);
-                let auth = self.auth_header().await;
-                if let Ok(res) = self
-                    .http
-                    .get(&p2p_url)
-                    .header("Authorization", &auth)
-                    .timeout(Duration::from_secs(4))
-                    .send()
-                    .await
-                {
-                    if res.status().is_success() {
-                        p2p_response = Some(res);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 2. If LAN P2P is not reachable, try ephemeral relay pipe on Agro server
-        if p2p_response.is_none() {
-            if let Some(peer) = track.peer_sources.iter().find(|s| !s.is_server_archive) {
-                let open_url = format!("{}/api/v1/relay/open", self.server);
-                let auth = self.auth_header().await;
-                let open_body = json!({
-                    "contentHash": track.content_hash,
-                    "fromDevice": peer.device_id,
-                    "toDevice": self.device_id,
-                });
-                if let Ok(open_res) = self
-                    .http
-                    .post(&open_url)
-                    .header("Authorization", &auth)
-                    .json(&open_body)
-                    .timeout(Duration::from_secs(5))
-                    .send()
-                    .await
-                {
-                    if open_res.status().is_success() {
-                        if let Ok(val) = open_res.json::<serde_json::Value>().await {
-                            if let Some(session_id) = val.get("sessionId").and_then(|s| s.as_str()) {
-                                let recv_url = format!("{}/api/v1/relay/{session_id}/receive", self.server);
-                                if let Ok(res) = self
-                                    .http
-                                    .get(&recv_url)
-                                    .header("Authorization", &auth)
-                                    .send()
-                                    .await
-                                {
-                                    if res.status().is_success() {
-                                        p2p_response = Some(res);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Fall back to permanent server archive
-        let response = match p2p_response {
+        // Preference order: a direct LAN transfer, then the relay pipe through the server, then
+        // the server's own archive. Only the last one is required to explain why it failed.
+        let response = match self.fetch_over_lan(track).await {
             Some(res) => res,
-            None => {
-                let fetch_url = format!("{}/api/v1/library/fetch/{}", self.server, track.content_hash);
-                let mut auth = self.auth_header().await;
-                let mut res = self
-                    .http
-                    .get(&fetch_url)
-                    .header("Authorization", &auth)
-                    .send()
-                    .await
-                    .context("asking the server for the file")?;
-
-                if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
-                    auth = self.auth_header().await;
-                    res = self
-                        .http
-                        .get(&fetch_url)
-                        .header("Authorization", &auth)
-                        .send()
-                        .await
-                        .context("asking the server for the file")?;
-                }
-
-                if !res.status().is_success() {
-                    return Err(anyhow!(
-                        "the server would not hand that file over ({})",
-                        res.status()
-                    ));
-                }
-                res
-            }
+            None => match self.fetch_over_relay(track).await {
+                Some(res) => res,
+                None => self.fetch_from_archive(track).await?,
+            },
         };
 
         let artist = crate::plugins::sanitize_filename(&track.artist);
-        let album = crate::plugins::sanitize_filename(track.album.as_deref().unwrap_or("Unknown Album"));
+        let album =
+            crate::plugins::sanitize_filename(track.album.as_deref().unwrap_or("Unknown Album"));
         let title = crate::plugins::sanitize_filename(&track.title);
         let folder = dir.join(&artist).join(&album);
         tokio::fs::create_dir_all(&folder)
@@ -612,7 +644,9 @@ pub fn hash_file(path: &Path) -> Result<String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; HASH_BUFFER];
     loop {
-        let read = file.read(&mut buffer).context("reading the file to hash it")?;
+        let read = file
+            .read(&mut buffer)
+            .context("reading the file to hash it")?;
         if read == 0 {
             break;
         }
@@ -654,7 +688,7 @@ mod tests {
 /// Exercises the real protocol against a running Agro.
 ///
 /// Ignored by default — it needs a server. Run with the address and token in the environment:
-/// 
+///
 #[cfg(test)]
 mod live {
     use super::*;
@@ -698,12 +732,18 @@ mod live {
 
         let outcome = client.upload(&track).await.unwrap();
         assert!(
-            matches!(outcome, UploadOutcome::Uploaded | UploadOutcome::AlreadyPresent),
+            matches!(
+                outcome,
+                UploadOutcome::Uploaded | UploadOutcome::AlreadyPresent
+            ),
             "unexpected outcome: {outcome:?}"
         );
 
         // Second time round the bytes must not move again.
-        assert_eq!(client.upload(&track).await.unwrap(), UploadOutcome::AlreadyPresent);
+        assert_eq!(
+            client.upload(&track).await.unwrap(),
+            UploadOutcome::AlreadyPresent
+        );
 
         let missing = client.missing_here(50).await.unwrap();
         assert!(

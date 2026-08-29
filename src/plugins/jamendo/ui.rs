@@ -1,7 +1,7 @@
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState};
-use ratatui::Frame;
 
 use super::api::JamendoFormat;
 use crate::app::{App, Pane, format_duration};
@@ -69,7 +69,10 @@ fn draw_search_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
         } else {
             app.jamendo_plugin.query.clone()
         };
-        (crate::ui::widgets::truncate(&text, input_width), theme.base())
+        (
+            crate::ui::widgets::truncate(&text, input_width),
+            theme.base(),
+        )
     };
 
     frame.render_widget(Paragraph::new(query_text).style(query_style), query_inner);
@@ -95,7 +98,13 @@ fn draw_search_bar(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, 
     );
 }
 
-fn draw_results_table(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {
+fn draw_results_table(
+    frame: &mut Frame,
+    area: Rect,
+    app: &mut App,
+    theme: &Theme,
+    hits: &mut Hits,
+) {
     if app.jamendo_plugin.searching {
         let loading = vec![
             Line::from(""),
