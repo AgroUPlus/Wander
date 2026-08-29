@@ -22,6 +22,7 @@ pub struct Config {
     #[serde(default)]
     pub glyphs: crate::ui::glyphs::GlyphSet,
     pub discord: DiscordConfig,
+    pub tray: TrayConfig,
     pub local: LocalConfig,
     pub lyrics: LyricsConfig,
     pub plugins: PluginsConfig,
@@ -331,6 +332,23 @@ pub struct DiscordConfig {
     pub cover_art: bool,
 }
 
+/// The status-bar icon.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrayConfig {
+    /// On by default, unlike Discord Rich Presence: this sends nothing anywhere, needs no account
+    /// or client id, and on a machine with no status-bar host it simply does not appear. There is
+    /// nothing for a user to opt into, only something to switch off if they would rather not have
+    /// the icon.
+    pub enabled: bool,
+}
+
+impl Default for TrayConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 impl Default for DiscordConfig {
     fn default() -> Self {
         Self {
@@ -345,6 +363,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server: ServerConfig::default(),
+            tray: TrayConfig::default(),
             theme: Theme::default(),
             theme_preset: Some("Tokyo Night".to_string()),
             queue_columns: Column::defaults(),
@@ -737,5 +756,43 @@ mod credential_tests {
             agro.is_ready(),
             "pairing from a URI produced a config nothing would use"
         );
+    }
+}
+
+#[cfg(test)]
+mod tray_config_tests {
+    use super::*;
+
+    /// On unless the user says otherwise. The icon costs nothing on a machine with no status bar,
+    /// so making people discover a setting before they get it would be the wrong default.
+    #[test]
+    fn the_tray_is_enabled_by_default() {
+        assert!(TrayConfig::default().enabled);
+        assert!(Config::default().tray.enabled);
+    }
+
+    /// An existing `config.toml` predates this section entirely, and reading one must not reset
+    /// the file or fail: `#[serde(default)]` is what fills the gap.
+    #[test]
+    fn a_config_without_a_tray_section_still_parses() {
+        let config: Config = toml::from_str("").expect("an empty config is valid");
+        assert!(config.tray.enabled, "a missing section means the default");
+    }
+
+    #[test]
+    fn the_tray_can_be_switched_off() {
+        let config: Config =
+            toml::from_str("[tray]\nenabled = false\n").expect("valid config");
+        assert!(!config.tray.enabled);
+    }
+
+    /// It has to survive a save/load cycle, or switching it off would not stick.
+    #[test]
+    fn the_setting_round_trips_through_toml() {
+        let mut config = Config::default();
+        config.tray.enabled = false;
+        let text = toml::to_string(&config).expect("serialises");
+        let back: Config = toml::from_str(&text).expect("deserialises");
+        assert!(!back.tray.enabled);
     }
 }

@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
     let mut spectrum = player::spectrum::Spectrum::new(tap, player.shared.sample_rate(), 32);
 
     let discord_config = config.discord.clone();
+    let tray_enabled = config.tray.enabled;
     let agro_config = config.agro.clone();
 
     let (load_tx, mut load_rx) = mpsc::unbounded_channel();
@@ -155,6 +156,15 @@ async fn main() -> Result<()> {
         integrations::mpris::spawn(app.player.clone(), std::sync::Arc::clone(&app.covers)).await
     {
         app.status_message = Some(format!("MPRIS unavailable: {err:#}"));
+    }
+
+    // The status-bar icon, for when the terminal is behind something else. On by default and
+    // failing the same way MPRIS does: a tty or an SSH session has no status-bar host, and that is
+    // a normal way to run this program rather than a problem to complain loudly about.
+    if tray_enabled {
+        if let Err(err) = integrations::tray::spawn(app.player.clone()).await {
+            app.status_message = Some(format!("Tray unavailable: {err:#}"));
+        }
     }
 
     // Rich Presence is opt-in and must never interfere with playback, so a

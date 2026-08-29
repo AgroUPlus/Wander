@@ -6,4 +6,5 @@ pub mod discord;
 pub mod mpris;
 pub mod p2p_server;
 pub mod share_link;
+pub mod tray;
 pub mod sync;
