@@ -3,7 +3,6 @@ pub mod glyphs;
 pub mod help;
 pub mod home;
 pub mod jam;
-pub mod social;
 pub mod library;
 pub mod lyrics;
 pub mod operations;
@@ -11,6 +10,7 @@ pub mod overlay;
 pub mod player_bar;
 pub mod queue;
 pub mod settings;
+pub mod social;
 pub mod tabs;
 pub mod visualiser;
 pub mod widgets;
@@ -183,11 +183,9 @@ fn draw_focus(
     hits: &mut Hits,
 ) {
     let (_, queue_percent, viz_height) = app.tween_panes();
-    let show_viz_bottom = app.show_focus_cover
-        && app.show_visualiser
-        && area.height > viz_height + 8;
-    let show_viz_in_middle =
-        !app.show_focus_cover && app.show_visualiser;
+    let show_viz_bottom =
+        app.show_focus_cover && app.show_visualiser && area.height > viz_height + 8;
+    let show_viz_in_middle = !app.show_focus_cover && app.show_visualiser;
 
     let mut constraints = vec![Constraint::Length(3), Constraint::Min(5)];
     if show_viz_bottom {
@@ -441,7 +439,11 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::T
 
     let (text, style) = if let Some(msg) = &app.status_message {
         let single_line = msg.replace('\n', " • ").replace('\r', "");
-        let st = if msg.contains("failed") || msg.contains("error") || msg.contains("limit") || msg.contains("Err") {
+        let st = if msg.contains("failed")
+            || msg.contains("error")
+            || msg.contains("limit")
+            || msg.contains("Err")
+        {
             theme.error()
         } else {
             theme.selected()
@@ -449,7 +451,11 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::T
         (format!("⚡ {single_line}{ops_badge}"), st)
     } else {
         let radio_active = app.player.queue.lock().unwrap().radio;
-        let radio_badge = if radio_active { "  •  Auto-Mix ON" } else { "" };
+        let radio_badge = if radio_active {
+            "  •  Auto-Mix ON"
+        } else {
+            ""
+        };
         (
             format!(
                 "space play/pause  •  n/p skip  •  a queue  •  / go to anything  •  m library view  •  F focus{radio_badge}{ops_badge}"
@@ -459,7 +465,6 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App, theme: &crate::theme::T
     };
     frame.render_widget(Paragraph::new(text).style(style).centered(), area);
 }
-
 
 /// The Online tab's plugin selector: every enabled source, active one lit.
 ///
@@ -482,7 +487,11 @@ fn draw_source_selector(
         let active = *source == app.online_source;
         let label = format!(" {} ", source.title());
         let width = label.chars().count() as u16;
-        let style = if active { theme.selected() } else { theme.dim() };
+        let style = if active {
+            theme.selected()
+        } else {
+            theme.dim()
+        };
 
         hits.push(
             Rect {

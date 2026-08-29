@@ -149,7 +149,10 @@ impl Library for LocalLibrary {
                 track.path.display()
             ),
             None => {
-                let raw_path = song.id.strip_prefix(super::LOCAL_PREFIX).unwrap_or(&song.id);
+                let raw_path = song
+                    .id
+                    .strip_prefix(super::LOCAL_PREFIX)
+                    .unwrap_or(&song.id);
                 let path = PathBuf::from(raw_path);
                 if path.is_file() {
                     Ok(Source::File(path))

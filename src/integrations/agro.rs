@@ -21,15 +21,29 @@ use crate::integrations::share_link::ShareDomain;
 use crate::player::PlayerHandle;
 
 const ADJECTIVES: &[&str] = &[
-    "Cosmic", "Groovy", "Hyper", "Electric", "Snarky", "Velvet",
-    "Neon", "Chill", "Breezy", "Sonic", "Turbo", "Funky",
-    "Glitchy", "Slick", "Wobbly", "Mellow", "Quantum", "Zippy",
+    "Cosmic", "Groovy", "Hyper", "Electric", "Snarky", "Velvet", "Neon", "Chill", "Breezy",
+    "Sonic", "Turbo", "Funky", "Glitchy", "Slick", "Wobbly", "Mellow", "Quantum", "Zippy",
 ];
 
 const ANIMALS: &[&str] = &[
-    "Capybara", "Otter", "Badger", "Possum", "Wombat", "Gecko",
-    "Pangolin", "Falcon", "Koala", "Lemur", "Quokka", "Jaguar",
-    "Meerkat", "Axolotl", "Chinchilla", "Ferret", "Platypus", "Panda",
+    "Capybara",
+    "Otter",
+    "Badger",
+    "Possum",
+    "Wombat",
+    "Gecko",
+    "Pangolin",
+    "Falcon",
+    "Koala",
+    "Lemur",
+    "Quokka",
+    "Jaguar",
+    "Meerkat",
+    "Axolotl",
+    "Chinchilla",
+    "Ferret",
+    "Platypus",
+    "Panda",
 ];
 
 pub fn generate_petname(seed: &str) -> String {
@@ -128,7 +142,9 @@ impl RemoteFreshness {
         // The window is generous next to the sender's ten-second heartbeat, because the cost of
         // being wrong is asymmetric: a few seconds of staleness is invisible, while dropping a
         // live session over one slow heartbeat makes the display flicker.
-        let since = *self.unchanged_since.get_or_insert_with(std::time::Instant::now);
+        let since = *self
+            .unchanged_since
+            .get_or_insert_with(std::time::Instant::now);
         since.elapsed() < Duration::from_secs(HANDOFF_STALE_SECS)
     }
 
@@ -166,7 +182,12 @@ pub struct AgroClient {
 }
 
 /// Exchanges an account passphrase for a device token via `/api/v1/login`.
-pub async fn exchange_token(server: &str, username: &str, passphrase: &str, device_id: &str) -> Result<String> {
+pub async fn exchange_token(
+    server: &str,
+    username: &str,
+    passphrase: &str,
+    device_id: &str,
+) -> Result<String> {
     let client = Client::builder()
         .timeout(Duration::from_secs(4))
         .build()
@@ -293,7 +314,9 @@ impl AgroClient {
         let label = self
             .device_name()
             .unwrap_or_else(|| self.device_id.trim().to_string());
-        if let Ok(new_tok) = exchange_token(&self.server, &self.username, &self.passphrase, &label).await {
+        if let Ok(new_tok) =
+            exchange_token(&self.server, &self.username, &self.passphrase, &label).await
+        {
             remember_token(&new_tok);
             *self.token.write().await = Some(new_tok);
             true
@@ -377,9 +400,13 @@ impl AgroClient {
         Ok(json_data)
     }
 
-    pub async fn register_node(&self, device_name: Option<&str>, current_track: Option<&str>) -> Result<Option<String>> {
-        let lan_address = crate::integrations::p2p_server::detect_local_ip()
-            .map(|ip| format!("{ip}:8701"));
+    pub async fn register_node(
+        &self,
+        device_name: Option<&str>,
+        current_track: Option<&str>,
+    ) -> Result<Option<String>> {
+        let lan_address =
+            crate::integrations::p2p_server::detect_local_ip().map(|ip| format!("{ip}:8701"));
 
         let mutation = r#"
             mutation RegisterNode($userId: String!, $deviceId: String!, $clientType: String!, $deviceName: String, $lanAddress: String, $currentTrack: String) {
@@ -480,7 +507,9 @@ impl AgroClient {
             .get("data")
             .and_then(|d| d.get("createShortLink"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Failed to extract createShortLink UID from Agro response"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Failed to extract createShortLink UID from Agro response")
+            })?;
         Ok(uid.to_string())
     }
 
@@ -521,14 +550,42 @@ impl AgroClient {
             if h.is_null() {
                 return Ok(None);
             }
-            let track_uri = h.get("trackUri").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let track_title = h.get("trackTitle").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let artist_name = h.get("artistName").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let album_name = h.get("albumName").and_then(|v| v.as_str()).map(String::from);
-            let position_ms = h.get("positionMs").and_then(|v| v.as_i64()).unwrap_or_default();
-            let duration_ms = h.get("durationMs").and_then(|v| v.as_i64()).unwrap_or_default();
-            let is_playing = h.get("isPlaying").and_then(|v| v.as_bool()).unwrap_or_default();
-            let device_id = h.get("deviceId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let track_uri = h
+                .get("trackUri")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let track_title = h
+                .get("trackTitle")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let artist_name = h
+                .get("artistName")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let album_name = h
+                .get("albumName")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let position_ms = h
+                .get("positionMs")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            let duration_ms = h
+                .get("durationMs")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default();
+            let is_playing = h
+                .get("isPlaying")
+                .and_then(|v| v.as_bool())
+                .unwrap_or_default();
+            let device_id = h
+                .get("deviceId")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
 
             if !track_title.is_empty() {
                 let petname = format!("Node {}", &device_id);
@@ -636,7 +693,11 @@ impl AgroClient {
             .ok_or_else(|| anyhow::anyhow!("agro returned no statistics"))?;
 
         let mut by_hour = [0u64; 24];
-        for (index, value) in numbers(stats.get("byHour")).into_iter().take(24).enumerate() {
+        for (index, value) in numbers(stats.get("byHour"))
+            .into_iter()
+            .take(24)
+            .enumerate()
+        {
             by_hour[index] = value;
         }
 
@@ -983,7 +1044,8 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
 
                 let track_changed = song.id != last_song_id;
                 let pause_changed = paused != last_paused;
-                let periodic_sync = is_playing && last_update_time.elapsed() >= Duration::from_secs(10);
+                let periodic_sync =
+                    is_playing && last_update_time.elapsed() >= Duration::from_secs(10);
 
                 if track_changed || pause_changed || periodic_sync {
                     last_song_id = song.id.clone();
@@ -1021,7 +1083,10 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
 
                     let uri = namespaced_id(&song.id);
                     let title = song.title.clone();
-                    let artist = song.artist.clone().unwrap_or_else(|| "Unknown Artist".to_string());
+                    let artist = song
+                        .artist
+                        .clone()
+                        .unwrap_or_else(|| "Unknown Artist".to_string());
                     let album = song.album.clone();
 
                     tokio::spawn(async move {
@@ -1144,7 +1209,12 @@ mod token_reuse_tests {
 
         // Five separate clients, as five separate operations would build them.
         for _ in 0..5 {
-            let client = AgroClient::new(url.clone(), user.clone(), pass.clone(), "wander-testbox".into());
+            let client = AgroClient::new(
+                url.clone(),
+                user.clone(),
+                pass.clone(),
+                "wander-testbox".into(),
+            );
             let _ = client.fetch_stats("ALL").await;
         }
 

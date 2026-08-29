@@ -129,10 +129,9 @@ impl SettingItem {
             | Self::ReclaimSpace
             | Self::AgroCentralStats => Section::Agro,
 
-            Self::VolumeScale
-            | Self::BufferSeconds
-            | Self::AutoMix
-            | Self::ClearQueue => Section::Playback,
+            Self::VolumeScale | Self::BufferSeconds | Self::AutoMix | Self::ClearQueue => {
+                Section::Playback
+            }
 
             Self::ThemePreset
             | Self::Glyphs
@@ -277,7 +276,6 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::LocalPlaylistDir,
         SettingItem::ScanOnStart,
         SettingItem::Rescan,
-
         SettingItem::AgroEnabled,
         SettingItem::AgroServer,
         SettingItem::AgroUsername,
@@ -288,12 +286,10 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::SyncLibrary,
         SettingItem::ReclaimSpace,
         SettingItem::AgroCentralStats,
-
         SettingItem::VolumeScale,
         SettingItem::BufferSeconds,
         SettingItem::AutoMix,
         SettingItem::ClearQueue,
-
         SettingItem::ThemePreset,
         SettingItem::Glyphs,
         SettingItem::CoverWidth,
@@ -301,7 +297,6 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::ShowCover,
         SettingItem::ShowQueue,
         SettingItem::ShowLyrics,
-
         SettingItem::DiscordEnabled,
         SettingItem::DiscordClientId,
         SettingItem::DiscordCoverArt,
@@ -510,21 +505,20 @@ fn value_of(app: &App, item: SettingItem) -> String {
                     AgroStatus::Checking => "Checking…".into(),
                     AgroStatus::Refused(why) => format!("Not connected — {why}"),
                     AgroStatus::Unreachable(why) => format!("Cannot reach the server — {why}"),
-                    AgroStatus::Unknown if config.agro.device_token.trim().is_empty()
-                        && config.agro.passphrase.trim().is_empty() =>
+                    AgroStatus::Unknown
+                        if config.agro.device_token.trim().is_empty()
+                            && config.agro.passphrase.trim().is_empty() =>
                     {
                         "Enabled — no credential yet".into()
                     }
                     AgroStatus::Unknown => "Enabled — not checked yet".into(),
                 }
             }
-        },
+        }
         SettingItem::AgroDeviceName => {
-            let petname = config
-                .agro
-                .device_name
-                .clone()
-                .unwrap_or_else(|| crate::integrations::agro::generate_petname(&config.agro.device_id));
+            let petname = config.agro.device_name.clone().unwrap_or_else(|| {
+                crate::integrations::agro::generate_petname(&config.agro.device_id)
+            });
             format!("{} (wander)", petname)
         }
         SettingItem::AgroServer => {
@@ -600,7 +594,11 @@ fn value_of(app: &App, item: SettingItem) -> String {
 }
 
 fn on_off(value: bool) -> String {
-    if value { "Enabled".into() } else { "Disabled".into() }
+    if value {
+        "Enabled".into()
+    } else {
+        "Disabled".into()
+    }
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, app: &mut App, theme: &Theme, hits: &mut Hits) {

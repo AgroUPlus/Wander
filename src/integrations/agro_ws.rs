@@ -16,8 +16,8 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, UnboundedReceiver};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 /// First wait after a failure. Doubles up to [`MAX_BACKOFF`].
 const BASE_BACKOFF: Duration = Duration::from_secs(2);
@@ -34,10 +34,7 @@ pub enum LiveMessage {
     /// The room moved to a new track. Decided by the server, so this is an instruction.
     JamNowPlaying,
     /// This device is missing things another device has.
-    SyncOffer {
-        count: usize,
-        albums: Vec<String>,
-    },
+    SyncOffer { count: usize, albums: Vec<String> },
     /// The library changed. Worth re-checking what we are missing.
     LibraryUpdated,
     /// A friend handed this account a song.
@@ -79,7 +76,12 @@ struct OfferPayload {
 ///
 /// `token` goes in the query string rather than a header because a WebSocket handshake cannot
 /// carry custom headers in every client, and Agro accepts `?token=` for exactly that reason.
-pub fn spawn(server: &str, token_or_pass: &str, device_id: &str, username: Option<&str>) -> UnboundedReceiver<LiveMessage> {
+pub fn spawn(
+    server: &str,
+    token_or_pass: &str,
+    device_id: &str,
+    username: Option<&str>,
+) -> UnboundedReceiver<LiveMessage> {
     let (tx, rx) = mpsc::unbounded_channel();
     let server = server.to_string();
     let token_or_pass = token_or_pass.to_string();
@@ -106,7 +108,14 @@ pub fn spawn(server: &str, token_or_pass: &str, device_id: &str, username: Optio
                 backoff = BASE_BACKOFF;
             } else if let Some(ref u) = username {
                 // If connecting failed, attempt to exchange passphrase for a device token
-                if let Ok(new_tok) = crate::integrations::agro::exchange_token(&server, u, &token_or_pass, &device_id).await {
+                if let Ok(new_tok) = crate::integrations::agro::exchange_token(
+                    &server,
+                    u,
+                    &token_or_pass,
+                    &device_id,
+                )
+                .await
+                {
                     active_token = new_tok;
                 }
             }
@@ -161,16 +170,34 @@ fn parse(text: &str) -> Option<LiveMessage> {
         }
         "LIBRARY_UPDATED" => Some(LiveMessage::LibraryUpdated),
         "TRACK_DROP" => Some(LiveMessage::TrackDrop {
-            from: envelope.payload["from"].as_str().unwrap_or("someone").to_string(),
-            title: envelope.payload["trackTitle"].as_str().unwrap_or_default().to_string(),
-            artist: envelope.payload["artistName"].as_str().unwrap_or_default().to_string(),
+            from: envelope.payload["from"]
+                .as_str()
+                .unwrap_or("someone")
+                .to_string(),
+            title: envelope.payload["trackTitle"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            artist: envelope.payload["artistName"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         }),
         "JAM_UPDATED" => Some(LiveMessage::JamUpdated),
         "JAM_NOW_PLAYING" => Some(LiveMessage::JamNowPlaying),
         "RELAY_REQUEST" => Some(LiveMessage::RelayRequest {
-            session_id: envelope.payload["sessionId"].as_str().unwrap_or_default().to_string(),
-            content_hash: envelope.payload["contentHash"].as_str().unwrap_or_default().to_string(),
-            to_device: envelope.payload["toDevice"].as_str().unwrap_or_default().to_string(),
+            session_id: envelope.payload["sessionId"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            content_hash: envelope.payload["contentHash"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            to_device: envelope.payload["toDevice"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         }),
         // HANDOFF, NODE_UPDATE and SETTINGS_SYNC are someone else's business today. Ignoring them
         // by name rather than by accident means adding one later is a single arm.
@@ -208,9 +235,11 @@ mod tests {
             socket_url("https://agro.example.com/", "tok en", "wander-desktop").unwrap(),
             "wss://agro.example.com/ws/sync?token=tok%20en&device=wander-desktop"
         );
-        assert!(socket_url("http://127.0.0.1:1674", "t", "d")
-            .unwrap()
-            .starts_with("ws://127.0.0.1:1674/ws/sync"));
+        assert!(
+            socket_url("http://127.0.0.1:1674", "t", "d")
+                .unwrap()
+                .starts_with("ws://127.0.0.1:1674/ws/sync")
+        );
     }
 
     #[test]

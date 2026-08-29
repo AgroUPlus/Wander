@@ -584,9 +584,8 @@ impl Config {
         // Narrowed before the rename, not after: `rename` carries the mode with it, so setting it
         // here means the file is never observable at a wider mode, even briefly.
         restrict_permissions(&temp);
-        std::fs::rename(&temp, &path).with_context(|| {
-            format!("replacing config at {}", path.display())
-        })
+        std::fs::rename(&temp, &path)
+            .with_context(|| format!("replacing config at {}", path.display()))
     }
 
     /// Resolve the password, preferring the OS keyring over the config file.
@@ -632,8 +631,9 @@ mod pairing_uri_tests {
     #[test]
     fn a_pairing_uri_is_read_for_its_parts() {
         let mut agro = AgroConfig {
-            passphrase: "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
-                .to_string(),
+            passphrase:
+                "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
+                    .to_string(),
             ..AgroConfig::default()
         };
         agro.absorb_pairing_uri();
@@ -691,7 +691,10 @@ mod credential_tests {
             ..AgroConfig::default()
         };
         assert!(agro.has_credential(), "a device token is a credential");
-        assert!(agro.is_ready(), "a paired device was treated as unconfigured");
+        assert!(
+            agro.is_ready(),
+            "a paired device was treated as unconfigured"
+        );
     }
 
     #[test]
@@ -724,11 +727,15 @@ mod credential_tests {
     fn a_pairing_uri_leaves_a_ready_config() {
         let mut agro = AgroConfig {
             enabled: true,
-            passphrase: "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
-                .into(),
+            passphrase:
+                "agro://connect?username=alpha&token=abc123&server=https%3A%2F%2Fagro.example.com"
+                    .into(),
             ..AgroConfig::default()
         };
         agro.absorb_pairing_uri();
-        assert!(agro.is_ready(), "pairing from a URI produced a config nothing would use");
+        assert!(
+            agro.is_ready(),
+            "pairing from a URI produced a config nothing would use"
+        );
     }
 }

@@ -10,8 +10,8 @@
 //! that. The inbox *could* be stored — a drop is durable — but a terminal that is only running
 //! while you are looking at it gains little from it, so it is re-read on open like the rest.
 
-use crate::app::types::LoadEvent;
 use crate::app::App;
+use crate::app::types::LoadEvent;
 use crate::integrations::agro_social::Recap;
 
 impl App {
@@ -26,15 +26,25 @@ impl App {
     /// gated by different switches on different accounts, so a friend who has closed their
     /// statistics must not take the feed down with them.
     pub fn refresh_social(&mut self) {
-        let Some(client) = self.social_client() else { return };
+        let Some(client) = self.social_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
         tokio::spawn(async move {
             let friends = client.friends().await.unwrap_or_default();
             let feed = client.friend_activity().await.unwrap_or_default();
             let inbox = client.inbox().await.unwrap_or_default();
-            let recap = client.circle_recap(&period).await.unwrap_or_else(|_| Recap::default());
-            let _ = loads.send(LoadEvent::Social { friends, feed, inbox, recap });
+            let recap = client
+                .circle_recap(&period)
+                .await
+                .unwrap_or_else(|_| Recap::default());
+            let _ = loads.send(LoadEvent::Social {
+                friends,
+                feed,
+                inbox,
+                recap,
+            });
         });
     }
 
@@ -43,8 +53,12 @@ impl App {
     /// Reading is what opening it means, so there is no separate confirmation. A drop that is not
     /// this account's to mark answers `false` and simply changes nothing.
     pub fn read_selected_drop(&mut self) {
-        let Some(client) = self.social_client() else { return };
-        let Some(drop) = self.inbox.get(self.inbox_sel).cloned() else { return };
+        let Some(client) = self.social_client() else {
+            return;
+        };
+        let Some(drop) = self.inbox.get(self.inbox_sel).cloned() else {
+            return;
+        };
         if !drop.is_unread() {
             return;
         }
@@ -58,8 +72,12 @@ impl App {
 
     /// Takes the selected drop out of the inbox.
     pub fn archive_selected_drop(&mut self) {
-        let Some(client) = self.social_client() else { return };
-        let Some(drop) = self.inbox.get(self.inbox_sel).cloned() else { return };
+        let Some(client) = self.social_client() else {
+            return;
+        };
+        let Some(drop) = self.inbox.get(self.inbox_sel).cloned() else {
+            return;
+        };
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
         self.status_message = Some(format!("Archived “{}”", drop.track_title));
@@ -97,8 +115,12 @@ impl App {
     /// Sends the pending drop, with whatever note was typed.
     pub fn confirm_drop(&mut self) {
         let note = self.drop_note_input.take().unwrap_or_default();
-        let Some(to) = self.drop_target.take() else { return };
-        let Some(client) = self.social_client() else { return };
+        let Some(to) = self.drop_target.take() else {
+            return;
+        };
+        let Some(client) = self.social_client() else {
+            return;
+        };
         let Some(song) = self.selected_songs().into_iter().next() else {
             self.status_message = Some("No track selected to send".into());
             return;
@@ -145,7 +167,12 @@ async fn refresh_into(
     let feed = client.friend_activity().await.unwrap_or_default();
     let inbox = client.inbox().await.unwrap_or_default();
     let recap = client.circle_recap(&period).await.unwrap_or_default();
-    let _ = loads.send(LoadEvent::Social { friends, feed, inbox, recap });
+    let _ = loads.send(LoadEvent::Social {
+        friends,
+        feed,
+        inbox,
+        recap,
+    });
 }
 
 impl App {

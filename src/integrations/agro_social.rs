@@ -15,7 +15,8 @@ use serde_json::json;
 
 use super::agro::AgroClient;
 
-const DROP_FIELDS: &str = "id fromUser toUser trackTitle artistName albumName note createdAt readAt";
+const DROP_FIELDS: &str =
+    "id fromUser toUser trackTitle artistName albumName note createdAt readAt";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Friend {

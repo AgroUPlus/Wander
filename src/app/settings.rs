@@ -395,15 +395,15 @@ impl App {
                 SettingItem::AgroServer => self.config.agro.server.clone(),
                 SettingItem::AgroUsername => self.config.agro.username.clone(),
                 SettingItem::AgroPassphrase => self.config.agro.passphrase.clone(),
-            #[cfg(feature = "nyaa")]
-            SettingItem::PluginNyaaDownloadDir => self
-                .config
-                .plugins
-                .nyaa
-                .download_dir
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
+                #[cfg(feature = "nyaa")]
+                SettingItem::PluginNyaaDownloadDir => self
+                    .config
+                    .plugins
+                    .nyaa
+                    .download_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
                 SettingItem::PluginArchiveDownloadDir => self
                     .config
                     .plugins
@@ -614,7 +614,8 @@ impl App {
             }
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => {
-                self.config.plugins.nyaa.download_dir = (!value.is_empty()).then(|| expand_home(&value));
+                self.config.plugins.nyaa.download_dir =
+                    (!value.is_empty()).then(|| expand_home(&value));
                 let _ = self.config.save();
                 self.status_message = Some("Nyaa download path updated".into());
             }
@@ -738,7 +739,10 @@ impl App {
         let roots = self.config.local.paths.clone();
         let loads = self.loads.clone();
         self.scan_status = Some("scanning…".to_string());
-        self.push_notification(NotificationLevel::Info, "Started scanning local music folders...");
+        self.push_notification(
+            NotificationLevel::Info,
+            "Started scanning local music folders...",
+        );
         self.add_operation(Operation {
             id: "local-scan".into(),
             title: "Local Library Scan".into(),

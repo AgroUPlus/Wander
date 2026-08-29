@@ -13,10 +13,9 @@ impl App {
         // Say why up front rather than opening a dialog that can only fail:
         // only the server can mint a share URL, so a local file or a track a
         // plugin pulled off the internet has nothing to share.
-        if let Some(song) = songs
-            .iter()
-            .find(|song| crate::library::SongSource::of(&song.id) != crate::library::SongSource::Server)
-        {
+        if let Some(song) = songs.iter().find(|song| {
+            crate::library::SongSource::of(&song.id) != crate::library::SongSource::Server
+        }) {
             let source = crate::library::SongSource::of(&song.id);
             self.status_message = Some(format!(
                 "{} tracks cannot be shared — there is no server to serve them",
@@ -201,8 +200,13 @@ impl App {
             None
         };
         self.spawn_load(async move {
-            let result = match library.create_share(&ids, &description, expires, downloadable).await {
-                Ok(share) => Ok(share_domain.rewrite_async(&share.url, agro_client.as_ref()).await),
+            let result = match library
+                .create_share(&ids, &description, expires, downloadable)
+                .await
+            {
+                Ok(share) => Ok(share_domain
+                    .rewrite_async(&share.url, agro_client.as_ref())
+                    .await),
                 Err(err) => Err(format!("{err:#}")),
             };
             Ok(LoadEvent::ShareCreated(result))

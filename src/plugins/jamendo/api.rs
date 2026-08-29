@@ -35,11 +35,8 @@ pub enum JamendoFormat {
 }
 
 impl JamendoFormat {
-    pub const ALL: [JamendoFormat; 3] = [
-        JamendoFormat::Flac,
-        JamendoFormat::Mp3,
-        JamendoFormat::Ogg,
-    ];
+    pub const ALL: [JamendoFormat; 3] =
+        [JamendoFormat::Flac, JamendoFormat::Mp3, JamendoFormat::Ogg];
 
     /// Value stored in the config file.
     pub fn code(self) -> &'static str {

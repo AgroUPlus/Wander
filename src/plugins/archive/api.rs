@@ -337,12 +337,17 @@ pub fn parse_metadata_files(body: &serde_json::Value) -> Vec<ArchiveFile> {
     for entry in entries {
         let (Some(name), Some(length)) = (
             entry.get("name").and_then(|v| v.as_str()),
-            entry.get("length").and_then(|v| v.as_str()).map(parse_length),
+            entry
+                .get("length")
+                .and_then(|v| v.as_str())
+                .map(parse_length),
         ) else {
             continue;
         };
         if length > 0 {
-            length_by_stem.entry(file_stem(name).to_string()).or_insert(length);
+            length_by_stem
+                .entry(file_stem(name).to_string())
+                .or_insert(length);
         }
     }
 
@@ -373,7 +378,12 @@ pub fn parse_metadata_files(body: &serde_json::Value) -> Vec<ArchiveFile> {
             track: entry
                 .get("track")
                 .and_then(|v| v.as_str().and_then(|s| s.split('/').next()?.parse().ok()))
-                .or_else(|| entry.get("track").and_then(|v| v.as_u64()).map(|n| n as u32)),
+                .or_else(|| {
+                    entry
+                        .get("track")
+                        .and_then(|v| v.as_u64())
+                        .map(|n| n as u32)
+                }),
             duration: entry
                 .get("length")
                 .and_then(|v| v.as_str())
@@ -583,6 +593,9 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        assert_eq!(parse_metadata_cover_art(&body_waveform_only, "test-item"), None);
+        assert_eq!(
+            parse_metadata_cover_art(&body_waveform_only, "test-item"),
+            None
+        );
     }
 }

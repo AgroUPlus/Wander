@@ -118,12 +118,7 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 /// "what does this key do" is also where they can ask "what is that symbol".
 /// Dropped entirely when the row is too narrow to hold it beside the hint,
 /// since a half-drawn legend explains nothing.
-fn source_legend<'a>(
-    app: &App,
-    theme: &Theme,
-    hint: &'a str,
-    width: usize,
-) -> Line<'a> {
+fn source_legend<'a>(app: &App, theme: &Theme, hint: &'a str, width: usize) -> Line<'a> {
     use crate::library::SongSource;
 
     let glyphs = app.config.glyphs;

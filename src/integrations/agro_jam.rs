@@ -197,7 +197,8 @@ impl AgroClient {
     }
 
     pub async fn leave_jam(&self) -> Result<()> {
-        self.graphql(&json!({ "query": "mutation { leaveJam }" })).await?;
+        self.graphql(&json!({ "query": "mutation { leaveJam }" }))
+            .await?;
         Ok(())
     }
 

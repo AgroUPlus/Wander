@@ -5,8 +5,8 @@
 //! uses — each mutation returns the entire jam — so there is never a partial update to merge, and
 //! somebody else's vote landing between your keypress and the answer is simply part of the result.
 
-use crate::app::types::LoadEvent;
 use crate::app::App;
+use crate::app::types::LoadEvent;
 use crate::integrations::agro_jam::JamMode;
 
 impl App {
@@ -17,7 +17,9 @@ impl App {
 
     /// Re-reads the jam. Called on opening the tab and on a `JAM_UPDATED` frame.
     pub fn refresh_jam(&mut self) {
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         tokio::spawn(async move {
             if let Ok(jam) = client.jam().await {
@@ -27,7 +29,9 @@ impl App {
     }
 
     pub fn create_jam(&mut self) {
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         self.borrow_queue_for_jam();
         let loads = self.loads.clone();
         self.status_message = Some("Starting a jam…".into());
@@ -41,8 +45,7 @@ impl App {
     /// Opens the prompt for a join code. The code is the whole credential, so it is typed rather
     /// than discovered.
     pub fn prompt_join_jam(&mut self) {
-        self.status_message =
-            Some("Join code: type it, then press Enter (Esc cancels)".into());
+        self.status_message = Some("Join code: type it, then press Enter (Esc cancels)".into());
         self.jam_join_input = Some(String::new());
     }
 
@@ -69,7 +72,9 @@ impl App {
         let Some(code) = self.jam_join_input.take().filter(|c| !c.trim().is_empty()) else {
             return;
         };
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         self.borrow_queue_for_jam();
         let loads = self.loads.clone();
         tokio::spawn(async move {
@@ -92,7 +97,9 @@ impl App {
             self.status_message = Some("Nothing to accept — that one is already in".into());
             return;
         };
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         tokio::spawn(async move {
             if let Ok(jam) = client.approve_jam_track(&track).await {
@@ -102,8 +109,12 @@ impl App {
     }
 
     pub fn remove_selected_jam_track(&mut self) {
-        let Some(track) = self.selected_jam_track_id() else { return };
-        let Some(client) = self.jam_client() else { return };
+        let Some(track) = self.selected_jam_track_id() else {
+            return;
+        };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         tokio::spawn(async move {
             if let Ok(jam) = client.remove_jam_track(&track).await {
@@ -114,8 +125,15 @@ impl App {
 
     /// Votes to skip whatever the room is playing.
     pub fn vote_skip_jam_track(&mut self) {
-        let Some(client) = self.jam_client() else { return };
-        if self.jam.as_ref().and_then(|j| j.now_playing.as_ref()).is_none() {
+        let Some(client) = self.jam_client() else {
+            return;
+        };
+        if self
+            .jam
+            .as_ref()
+            .and_then(|j| j.now_playing.as_ref())
+            .is_none()
+        {
             self.status_message = Some("Nothing is playing to skip".into());
             return;
         }
@@ -135,7 +153,9 @@ impl App {
             return;
         }
         let next = !jam.open_to_friends;
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         self.status_message = Some(if next {
             "Open to your friends".into()
@@ -157,7 +177,9 @@ impl App {
             return;
         }
         let next = jam.mode.toggled();
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         let loads = self.loads.clone();
         tokio::spawn(async move {
             if let Ok(jam) = client.set_jam_mode(next).await {
@@ -169,7 +191,9 @@ impl App {
     /// Leaving, or ending it if you host it — the server decides which, and says so by answering
     /// with no jam.
     pub fn leave_jam(&mut self) {
-        let Some(client) = self.jam_client() else { return };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         self.return_queue_after_jam();
         let loads = self.loads.clone();
         tokio::spawn(async move {
@@ -182,8 +206,12 @@ impl App {
     pub fn add_selected_to_jam(&mut self) {
         // Whatever the focused pane considers selected — the same set every other "act on this
         // track" key uses, so adding to a jam works from the library, a playlist or the queue.
-        let Some(song) = self.selected_songs().into_iter().next() else { return };
-        let Some(client) = self.jam_client() else { return };
+        let Some(song) = self.selected_songs().into_iter().next() else {
+            return;
+        };
+        let Some(client) = self.jam_client() else {
+            return;
+        };
         if self.jam.is_none() {
             self.status_message = Some("You are not in a jam".into());
             return;
@@ -207,10 +235,57 @@ impl App {
             format!("Added “{title}” to the jam")
         });
         tokio::spawn(async move {
-            if let Ok(jam) = client.add_jam_track(&uri, &title, &artist, duration_ms).await {
+            if let Ok(jam) = client
+                .add_jam_track(&uri, &title, &artist, duration_ms)
+                .await
+            {
                 let _ = loads.send(LoadEvent::Jam(jam));
             }
         });
+    }
+
+    /// Whether a library track is the one the room named.
+    ///
+    /// Loose on purpose: the room's title comes from whatever device queued it, so
+    /// remaster suffixes and a missing artist are normal and should still match.
+    fn matches_now_playing(
+        title: &str,
+        artist: Option<&str>,
+        wanted_title: &str,
+        wanted_artist: &str,
+    ) -> bool {
+        let s_title = clean_track_name(title);
+        let title_match = s_title == wanted_title
+            || s_title.contains(wanted_title)
+            || wanted_title.contains(&s_title);
+        let artist_match = wanted_artist.is_empty()
+            || artist
+                .map(|a| {
+                    let sa = clean_track_name(a);
+                    sa.is_empty()
+                        || sa == wanted_artist
+                        || sa.contains(wanted_artist)
+                        || wanted_artist.contains(&sa)
+                })
+                .unwrap_or(true);
+        title_match && artist_match
+    }
+
+    /// Starts the room's track here and jumps to where the room already is.
+    fn play_at_jam_position(
+        &mut self,
+        now: &crate::integrations::agro_jam::JamNowPlaying,
+        songs: Vec<crate::subsonic::models::Song>,
+        index: usize,
+    ) {
+        self.jam_playing_track = Some(now.track_id.clone());
+        self.player
+            .send(crate::player::PlayerCommand::PlayNow { songs, index });
+        if now.position_ms > 0 {
+            self.player.send(crate::player::PlayerCommand::SeekTo(
+                std::time::Duration::from_millis(now.position_ms as u64),
+            ));
+        }
     }
 
     /// Plays what the server says the room is on, at the position it says.
@@ -228,36 +303,19 @@ impl App {
 
         let wanted_title = clean_track_name(&now.title);
         let wanted_artist = clean_track_name(&now.artist);
+        let matches = |title: &str, artist: Option<&str>| {
+            Self::matches_now_playing(title, artist, &wanted_title, &wanted_artist)
+        };
 
         // 1. Match against currently loaded tracks list
-        let found = self.tracks.iter().position(|song| {
-            let s_title = clean_track_name(&song.title);
-            let title_match = s_title == wanted_title
-                || s_title.contains(&wanted_title)
-                || wanted_title.contains(&s_title);
-            let artist_match = wanted_artist.is_empty()
-                || song
-                    .artist
-                    .as_deref()
-                    .map(|a| {
-                        let sa = clean_track_name(a);
-                        sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
-                    })
-                    .unwrap_or(true);
-            title_match && artist_match
-        });
+        let found = self
+            .tracks
+            .iter()
+            .position(|song| matches(&song.title, song.artist.as_deref()));
 
         if let Some(index) = found {
-            self.jam_playing_track = Some(now.track_id.clone());
             let songs = self.tracks.clone();
-            self.player
-                .send(crate::player::PlayerCommand::PlayNow { songs, index });
-            if now.position_ms > 0 {
-                self.player
-                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
-                        now.position_ms as u64,
-                    )));
-            }
+            self.play_at_jam_position(&now, songs, index);
             return;
         }
 
@@ -268,35 +326,13 @@ impl App {
             .and_then(|root| root.local())
             .map(|local| local.index())
             .and_then(|idx| {
-                idx.tracks.iter().find(|t| {
-                    let t_title = clean_track_name(&t.title);
-                    let title_match = t_title == wanted_title
-                        || t_title.contains(&wanted_title)
-                        || wanted_title.contains(&t_title);
-                    let artist_match = wanted_artist.is_empty()
-                        || t.artist
-                            .as_deref()
-                            .map(|a| {
-                                let sa = clean_track_name(a);
-                                sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
-                            })
-                            .unwrap_or(true);
-                    title_match && artist_match
-                }).map(|t| t.to_song())
+                idx.tracks
+                    .iter()
+                    .find(|t| matches(&t.title, t.artist.as_deref()))
+                    .map(|t| t.to_song())
             })
         {
-            self.jam_playing_track = Some(now.track_id.clone());
-            self.player
-                .send(crate::player::PlayerCommand::PlayNow {
-                    songs: vec![local_song],
-                    index: 0,
-                });
-            if now.position_ms > 0 {
-                self.player
-                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
-                        now.position_ms as u64,
-                    )));
-            }
+            self.play_at_jam_position(&now, vec![local_song], 0);
             return;
         }
 
@@ -309,43 +345,17 @@ impl App {
             .chain(self.playlist_songs.iter())
             .chain(self.favorites.iter())
             .chain(queue_songs.iter())
-            .find(|song| {
-                let s_title = clean_track_name(&song.title);
-                let title_match = s_title == wanted_title
-                    || s_title.contains(&wanted_title)
-                    || wanted_title.contains(&s_title);
-                let artist_match = wanted_artist.is_empty()
-                    || song
-                        .artist
-                        .as_deref()
-                        .map(|a| {
-                            let sa = clean_track_name(a);
-                            sa.is_empty() || sa == wanted_artist || sa.contains(&wanted_artist) || wanted_artist.contains(&sa)
-                        })
-                        .unwrap_or(true);
-                title_match && artist_match
-            })
+            .find(|song| matches(&song.title, song.artist.as_deref()))
             .cloned();
 
         if let Some(song) = other_found {
-            self.jam_playing_track = Some(now.track_id.clone());
-            self.player
-                .send(crate::player::PlayerCommand::PlayNow {
-                    songs: vec![song],
-                    index: 0,
-                });
-            if now.position_ms > 0 {
-                self.player
-                    .send(crate::player::PlayerCommand::SeekTo(std::time::Duration::from_millis(
-                        now.position_ms as u64,
-                    )));
-            }
+            self.play_at_jam_position(&now, vec![song], 0);
             return;
         }
 
         // Not skipped: the room is still playing it, and skipping ahead is what puts a device
         // out of step. This one simply sits the track out.
-        self.status_message = Some(format!("You don't have “{}”", now.title));
+        self.status_message = Some(format!("You don't have \u{201c}{}\u{201d}", now.title));
         self.jam_playing_track = None;
     }
 
@@ -371,7 +381,10 @@ fn clean_track_name(s: &str) -> String {
     let lower = s.to_lowercase();
     let without_ext = if let Some(idx) = lower.rfind('.') {
         let ext = &lower[idx + 1..];
-        if matches!(ext, "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma" | "alac") {
+        if matches!(
+            ext,
+            "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma" | "alac"
+        ) {
             &lower[..idx]
         } else {
             &lower

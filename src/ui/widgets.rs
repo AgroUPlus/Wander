@@ -98,7 +98,10 @@ pub fn gradient(from: Color, to: Color, t: f64) -> Color {
 /// One place decides both the glyph and the colour, so the queue, the library
 /// lists and the player bar cannot drift apart and teach the user two
 /// different meanings for the same symbol.
-pub fn source_glyph(source: crate::library::SongSource, glyphs: crate::ui::glyphs::GlyphSet) -> &'static str {
+pub fn source_glyph(
+    source: crate::library::SongSource,
+    glyphs: crate::ui::glyphs::GlyphSet,
+) -> &'static str {
     use crate::library::SongSource;
     use crate::ui::glyphs::Icon;
     glyphs.icon(match source {
@@ -110,10 +113,7 @@ pub fn source_glyph(source: crate::library::SongSource, glyphs: crate::ui::glyph
 
 /// Colour for a source badge, drawn from the active theme so it stays legible
 /// on every preset.
-pub fn source_style(
-    source: crate::library::SongSource,
-    theme: &crate::theme::Theme,
-) -> Style {
+pub fn source_style(source: crate::library::SongSource, theme: &crate::theme::Theme) -> Style {
     use crate::library::SongSource;
     let colour = match source {
         // The user's own files are the unremarkable case, so they get the
@@ -480,10 +480,20 @@ mod input_tests {
         use crate::ui::glyphs::GlyphSet;
 
         let theme = crate::theme::Theme::default();
-        let online = source_span("https://archive.org/download/x/y.flac", GlyphSet::Ascii, &theme);
-        assert_eq!(online.content, source_glyph(SongSource::Online, GlyphSet::Ascii));
+        let online = source_span(
+            "https://archive.org/download/x/y.flac",
+            GlyphSet::Ascii,
+            &theme,
+        );
+        assert_eq!(
+            online.content,
+            source_glyph(SongSource::Online, GlyphSet::Ascii)
+        );
 
         let local = source_span("local:/music/a.flac", GlyphSet::Ascii, &theme);
-        assert_eq!(local.content, source_glyph(SongSource::Local, GlyphSet::Ascii));
+        assert_eq!(
+            local.content,
+            source_glyph(SongSource::Local, GlyphSet::Ascii)
+        );
     }
 }

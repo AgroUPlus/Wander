@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use super::{Capabilities, Library, LocalLibrary, SongSource, Source, SubsonicLibrary, is_local_id};
+use super::{
+    Capabilities, Library, LocalLibrary, SongSource, Source, SubsonicLibrary, is_local_id,
+};
 use crate::subsonic::lyrics::LyricSet;
 use crate::subsonic::models::{
     Album, AlbumInfo, Artist, Genre, Playlist, SearchResult3, Share, Song,
@@ -234,14 +236,21 @@ impl Library for MergedLibrary {
                 .unwrap_or_default();
             let response = http
                 .get(cover_id)
-                .header("User-Agent", "wander-tui/0.1 (https://archive.org; music player)")
+                .header(
+                    "User-Agent",
+                    "wander-tui/0.1 (https://archive.org; music player)",
+                )
                 .send()
                 .await
                 .context("fetching cover art")?;
             if !response.status().is_success() {
                 bail!("cover art request returned HTTP {}", response.status());
             }
-            return Ok(response.bytes().await.context("reading cover art")?.to_vec());
+            return Ok(response
+                .bytes()
+                .await
+                .context("reading cover art")?
+                .to_vec());
         }
 
         if let Some(path) = cover_id.strip_prefix(super::ONLINE_PREFIX) {

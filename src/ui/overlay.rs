@@ -121,12 +121,22 @@ fn draw_setup(frame: &mut Frame, area: Rect, state: &SetupState, theme: &Theme) 
         let card_suffix = "] ";
 
         lines.push(Line::from(vec![
-            Span::styled(card_prefix, if selected { theme.title() } else { theme.dim() }),
+            Span::styled(
+                card_prefix,
+                if selected { theme.title() } else { theme.dim() },
+            ),
             Span::styled(card_num, if selected { theme.title() } else { theme.dim() }),
-            Span::styled(card_suffix, if selected { theme.title() } else { theme.dim() }),
+            Span::styled(
+                card_suffix,
+                if selected { theme.title() } else { theme.dim() },
+            ),
             Span::styled(
                 (*label).to_string(),
-                if selected { theme.selected() } else { theme.base() },
+                if selected {
+                    theme.selected()
+                } else {
+                    theme.base()
+                },
             ),
         ]));
         lines.push(Line::from(Span::styled(
@@ -467,7 +477,10 @@ fn draw_sync(frame: &mut Frame, area: Rect, state: &SyncState, theme: &Theme) {
 
     match &state.result {
         Some(Ok(count)) => {
-            lines.push(Line::styled(format!("Fetched {count} tracks."), theme.title()));
+            lines.push(Line::styled(
+                format!("Fetched {count} tracks."),
+                theme.title(),
+            ));
             lines.push(Line::raw(""));
             lines.push(Line::styled("Enter to close", theme.dim()));
         }
@@ -951,7 +964,11 @@ mod tests {
     fn toggle_all_clears_then_restores() {
         let mut state = SyncState::new(vec![missing("a", 1), missing("b", 1)]);
         state.toggle_all();
-        assert_eq!(state.selected_count(), 0, "all selected means the next press clears");
+        assert_eq!(
+            state.selected_count(),
+            0,
+            "all selected means the next press clears"
+        );
         state.toggle_all();
         assert_eq!(state.selected_count(), 2);
     }

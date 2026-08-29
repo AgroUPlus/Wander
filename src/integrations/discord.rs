@@ -184,7 +184,10 @@ impl Presence {
             let remote = if playing_here {
                 None
             } else {
-                crate::integrations::agro::get_remote_handoff().read().await.clone()
+                crate::integrations::agro::get_remote_handoff()
+                    .read()
+                    .await
+                    .clone()
             };
             let source = match (remote, status.current.clone()) {
                 (Some(remote), _) => Some(Source::Remote(remote)),
@@ -362,7 +365,9 @@ impl Presence {
                         info.music_brainz_id
                             .as_deref()
                             .filter(|mbid| !mbid.trim().is_empty())
-                            .map(|mbid| format!("https://coverartarchive.org/release/{mbid}/front-250"))
+                            .map(|mbid| {
+                                format!("https://coverartarchive.org/release/{mbid}/front-250")
+                            })
                     })
                     .filter(|url| is_safe_to_share(url));
 
@@ -382,9 +387,13 @@ impl Presence {
         // 2. Try iTunes Search API for public high-res cover art
         let (clean_artist, _) = parse_clean_artist_album(song);
         let clean_title = clean_track_title(&song.title);
-        self.public_art_url(&cache_key, clean_artist.as_deref().unwrap_or(""), &clean_title)
-            .await
-            .url
+        self.public_art_url(
+            &cache_key,
+            clean_artist.as_deref().unwrap_or(""),
+            &clean_title,
+        )
+        .await
+        .url
     }
 
     /// A cover found by name alone, for a track this machine does not hold.
@@ -436,7 +445,11 @@ struct CoverMatch {
 const WANDER_COVER_URL: &str =
     "https://raw.githubusercontent.com/Kolbxyz/Wander/main/assets/cover.png";
 
-async fn fetch_itunes_cover(http: &reqwest::Client, artist: &str, title: &str) -> Option<CoverMatch> {
+async fn fetch_itunes_cover(
+    http: &reqwest::Client,
+    artist: &str,
+    title: &str,
+) -> Option<CoverMatch> {
     let query = if artist.trim().is_empty() {
         title.to_string()
     } else {
@@ -531,7 +544,9 @@ pub fn clean_release_tag(text: &str) -> String {
     }
 }
 
-pub fn parse_clean_artist_album(song: &crate::subsonic::models::Song) -> (Option<String>, Option<String>) {
+pub fn parse_clean_artist_album(
+    song: &crate::subsonic::models::Song,
+) -> (Option<String>, Option<String>) {
     let raw_artist = song.artist.as_deref().unwrap_or("");
     let raw_album = song.album.as_deref().unwrap_or("");
 
@@ -546,8 +561,16 @@ pub fn parse_clean_artist_album(song: &crate::subsonic::models::Song) -> (Option
         }
     }
 
-    let artist = if raw_artist.is_empty() { None } else { Some(clean_release_tag(raw_artist)) };
-    let album = if raw_album.is_empty() { None } else { Some(clean_release_tag(raw_album)) };
+    let artist = if raw_artist.is_empty() {
+        None
+    } else {
+        Some(clean_release_tag(raw_artist))
+    };
+    let album = if raw_album.is_empty() {
+        None
+    } else {
+        Some(clean_release_tag(raw_album))
+    };
 
     (artist, album)
 }
@@ -602,7 +625,10 @@ mod tests {
 
     #[test]
     fn cleans_track_title_prefix() {
-        assert_eq!(clean_track_title("03. LiSA - KiSS me PARADOX"), "LiSA - KiSS me PARADOX");
+        assert_eq!(
+            clean_track_title("03. LiSA - KiSS me PARADOX"),
+            "LiSA - KiSS me PARADOX"
+        );
         assert_eq!(clean_track_title("01 - Song Title"), "Song Title");
         assert_eq!(clean_track_title("Simple Song"), "Simple Song");
         assert_eq!(clean_track_title("Mr. Brightside"), "Mr. Brightside");
