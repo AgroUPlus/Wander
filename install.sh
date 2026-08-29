@@ -44,16 +44,27 @@ find_cargo() {
   return 1
 }
 
-# Always build as a regular user (never root) to preserve target/ permissions
-echo "==> Building wander (release)"
-CARGO_EXEC=$(find_cargo || echo "cargo")
-CARGO_DIR="$(dirname "$CARGO_EXEC")"
+# Determine binary location: use prebuilt binary if present, otherwise build from source
+SRC_BIN=""
+if [ -f "./wander" ]; then
+  SRC_BIN="./wander"
+elif [ -f "Cargo.toml" ]; then
+  echo "==> Building wander (release)"
+  CARGO_EXEC=$(find_cargo || echo "cargo")
+  CARGO_DIR="$(dirname "$CARGO_EXEC")"
 
-if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
-  sudo -u "$SUDO_USER" env PATH="$CARGO_DIR:$PATH" "$CARGO_EXEC" build --release
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    sudo -u "$SUDO_USER" env PATH="$CARGO_DIR:$PATH" "$CARGO_EXEC" build --release
+  else
+    export PATH="$CARGO_DIR:$PATH"
+    "$CARGO_EXEC" build --release
+  fi
+  SRC_BIN="target/release/wander"
+elif [ -f "target/release/wander" ]; then
+  SRC_BIN="target/release/wander"
 else
-  export PATH="$CARGO_DIR:$PATH"
-  "$CARGO_EXEC" build --release
+  echo "Error: Neither pre-built binary './wander' nor 'Cargo.toml' found." >&2
+  exit 1
 fi
 
 # Escalate to sudo ONLY for the copy/install phase if destination is not writable
@@ -65,7 +76,7 @@ fi
 
 echo "==> Installing binary to ${BIN_DIR}"
 mkdir -p "$BIN_DIR"
-install -m 755 target/release/wander "${BIN_DIR}/wander"
+install -m 755 "$SRC_BIN" "${BIN_DIR}/wander"
 
 echo "==> Installing desktop entry"
 mkdir -p "$APP_DIR" "$ICON_DIR"
