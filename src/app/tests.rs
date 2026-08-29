@@ -282,3 +282,41 @@ fn cover_click_registers_region() {
     assert_eq!(hits.at(10, 10), Some(Region::Cover));
     assert_eq!(hits.rect_of(Region::Cover), Some(area));
 }
+
+#[test]
+fn default_volume_is_one() {
+    assert_eq!(default_volume(), 1.0);
+}
+
+#[test]
+fn saved_state_deserializes_missing_volume_with_default() {
+    let raw = r#"{
+        "songs": [],
+        "index": 0,
+        "cover_percent": 25,
+        "queue_percent": 18,
+        "show_queue_pane": true,
+        "show_cover_pane": true,
+        "show_lyrics_pane": false,
+        "show_visualiser": true
+    }"#;
+    let state: SavedAppState = serde_json::from_str(raw).expect("should deserialize");
+    assert_eq!(state.volume, 1.0);
+}
+
+#[test]
+fn saved_state_preserves_custom_volume() {
+    let raw = r#"{
+        "songs": [],
+        "index": 0,
+        "volume": 0.65,
+        "cover_percent": 25,
+        "queue_percent": 18,
+        "show_queue_pane": true,
+        "show_cover_pane": true,
+        "show_lyrics_pane": false,
+        "show_visualiser": true
+    }"#;
+    let state: SavedAppState = serde_json::from_str(raw).expect("should deserialize");
+    assert!((state.volume - 0.65).abs() < 1e-6);
+}

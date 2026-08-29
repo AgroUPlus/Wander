@@ -5,33 +5,38 @@ use anyhow::Result;
 use std::time::Instant;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct SavedAppState {
-    songs: Vec<Song>,
-    index: usize,
-    volume: f32,
-    cover_percent: u16,
-    queue_percent: u16,
+pub(crate) struct SavedAppState {
+    pub(crate) songs: Vec<Song>,
+    pub(crate) index: usize,
+    #[serde(default = "default_volume")]
+    pub(crate) volume: f32,
+    pub(crate) cover_percent: u16,
+    pub(crate) queue_percent: u16,
     #[serde(default = "default_visualiser_height")]
-    visualiser_height: u16,
-    show_queue_pane: bool,
+    pub(crate) visualiser_height: u16,
+    pub(crate) show_queue_pane: bool,
     #[serde(default = "yes")]
-    show_focus_queue: bool,
-    show_cover_pane: bool,
+    pub(crate) show_focus_queue: bool,
+    pub(crate) show_cover_pane: bool,
     #[serde(default = "yes")]
-    show_focus_cover: bool,
-    show_lyrics_pane: bool,
+    pub(crate) show_focus_cover: bool,
+    pub(crate) show_lyrics_pane: bool,
     #[serde(default = "yes")]
-    show_focus_lyrics: bool,
-    show_visualiser: bool,
+    pub(crate) show_focus_lyrics: bool,
+    pub(crate) show_visualiser: bool,
     #[serde(default, deserialize_with = "crate::ui::visualiser::lenient_mode")]
-    viz_mode: crate::ui::visualiser::VizMode,
+    pub(crate) viz_mode: crate::ui::visualiser::VizMode,
     #[serde(default)]
-    radio: bool,
+    pub(crate) radio: bool,
     /// Position within the current track, so a restart resumes there.
     #[serde(default)]
-    elapsed_secs: f64,
+    pub(crate) elapsed_secs: f64,
     #[serde(default = "default_library_mode")]
-    library_mode: LibraryMode,
+    pub(crate) library_mode: LibraryMode,
+}
+
+pub(crate) fn default_volume() -> f32 {
+    1.0
 }
 
 /// Saved states written before focus mode existed should still show lyrics.
@@ -60,6 +65,10 @@ impl App {
     /// Write the session state if it is dirty and the cooldown has elapsed.
     /// `force` skips the cooldown, for quitting.
     pub fn flush_state(&mut self, force: bool) {
+        let current_volume = self.player.shared.volume();
+        if (current_volume - self.last_saved_volume).abs() > 0.001 {
+            self.state_dirty = true;
+        }
         if !self.state_dirty {
             return;
         }
@@ -68,6 +77,7 @@ impl App {
         }
         self.state_dirty = false;
         self.last_state_save = Instant::now();
+        self.last_saved_volume = current_volume;
         self.write_queue_state();
     }
 
@@ -129,7 +139,10 @@ impl App {
         self.show_visualiser = state.show_visualiser;
         self.viz_mode = state.viz_mode;
         self.library_mode = state.library_mode;
-        self.player.send(PlayerCommand::SetVolume(state.volume));
+        let volume = state.volume.clamp(0.0, 1.0);
+        self.player.shared.set_volume(volume);
+        self.player.send(PlayerCommand::SetVolume(volume));
+        self.last_saved_volume = volume;
         let restored = {
             let mut queue = self.player.queue.lock().unwrap();
             let restored = !state.songs.is_empty();

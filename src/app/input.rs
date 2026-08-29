@@ -487,8 +487,14 @@ impl App {
             Action::PrevTrack => self.player.send(PlayerCommand::Prev),
             Action::SeekForward => self.player.send(PlayerCommand::SeekForward),
             Action::SeekBackward => self.player.send(PlayerCommand::SeekBackward),
-            Action::VolumeUp => self.player.send(PlayerCommand::AdjustVolume(VOLUME_STEP)),
-            Action::VolumeDown => self.player.send(PlayerCommand::AdjustVolume(-VOLUME_STEP)),
+            Action::VolumeUp => {
+                self.player.send(PlayerCommand::AdjustVolume(VOLUME_STEP));
+                self.save_queue_state();
+            }
+            Action::VolumeDown => {
+                self.player.send(PlayerCommand::AdjustVolume(-VOLUME_STEP));
+                self.save_queue_state();
+            }
             Action::AgroTransferPlayback => {
                 let remote_store = crate::integrations::agro::get_remote_handoff();
                 if let Ok(guard) = remote_store.try_read() {
@@ -784,6 +790,7 @@ impl App {
                         Region::Volume => {
                             self.player
                                 .send(PlayerCommand::SetVolume(self.drag_ratio as f32));
+                            self.save_queue_state();
                         }
                         _ => {}
                     }

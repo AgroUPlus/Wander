@@ -21,14 +21,15 @@ pub fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme, hits: &mut 
     let mut spans = Vec::new();
     let mut x = inner.x;
 
+    let thunder = app.config.glyphs.icon(crate::ui::glyphs::Icon::Thunder);
     let available = app.available_tabs();
     for (index, tab) in available.iter().enumerate() {
         let label = if *tab == Tab::Operations {
             let active_count = app.active_operations_count();
             if active_count > 0 {
-                format!("  ⚡ Operations ({active_count})  ")
+                format!("  {thunder} Operations ({active_count})  ")
             } else {
-                format!("  ⚡ Operations  ")
+                format!("  {thunder} Operations  ")
             }
         } else {
             format!("  {}  ", tab.title())

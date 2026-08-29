@@ -255,27 +255,44 @@ impl App {
         // Local paths come from this machine's index, matched by content hash: the server sends
         // what it holds, and only this side knows where the local copy of it lives.
         let mut paths = Vec::new();
+        let mut hashes = Vec::new();
         for track in &tracks {
             if let Some(local) = self.local_track_by_hash(&track.content_hash) {
                 paths.push(local);
+                hashes.push(track.content_hash.clone());
             }
         }
+
+        let Some(client) = self.sync_client() else {
+            self.push_notification(NotificationLevel::Warning, "Agro connection not ready");
+            return;
+        };
+
         if paths.is_empty() {
+            let all_hashes: Vec<String> = tracks.into_iter().map(|t| t.content_hash).collect();
+            tokio::spawn(async move {
+                let _ = client.forget_holdings(&all_hashes).await;
+            });
             self.push_notification(
-                NotificationLevel::Warning,
-                "Nothing matched on disk — try a rescan first",
+                NotificationLevel::Info,
+                "Cleaned up stale server holdings (files already removed locally)",
             );
+            self.check_reclaimable();
             return;
         }
 
         let count = paths.len();
         match trash::delete_all(&paths) {
             Ok(()) => {
+                tokio::spawn(async move {
+                    let _ = client.forget_holdings(&hashes).await;
+                });
                 self.push_notification(
                     NotificationLevel::Success,
                     &format!("Moved {count} files to the trash — still on the server"),
                 );
                 self.rescan_local_library();
+                self.check_reclaimable();
             }
             Err(error) => {
                 self.push_notification(
@@ -633,7 +650,7 @@ async fn run_pass(
         .filter(|t| t.content_hash.is_none())
         .count();
 
-    // ── Report ──────────────────────────────────────────────────────────────────────────────
+    // ── Report & Reconcile ───────────────────────────────────────────────────
     let index = local.index();
     crate::integrations::p2p_server::GLOBAL_INDEX.update(&index.tracks);
     let hashed: Vec<&crate::library::local::index::LocalTrack> = index
@@ -641,6 +658,22 @@ async fn run_pass(
         .iter()
         .filter(|t| t.content_hash.is_some())
         .collect();
+
+    let local_hashes: std::collections::HashSet<&str> = hashed
+        .iter()
+        .filter_map(|t| t.content_hash.as_deref())
+        .collect();
+
+    // Drop holdings for files that no longer exist on this machine
+    if let Ok(server_holdings) = client.device_holdings().await {
+        let stale: Vec<String> = server_holdings
+            .into_iter()
+            .filter(|h| !local_hashes.contains(h.as_str()))
+            .collect();
+        if !stale.is_empty() {
+            let _ = client.forget_holdings(&stale).await;
+        }
+    }
 
     if config.p2p_sync && !hashed.is_empty() {
         progress(0.85, format!("Reporting {} tracks to Agro…", hashed.len()));

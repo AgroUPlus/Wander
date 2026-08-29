@@ -263,6 +263,7 @@ pub struct App {
     /// on every keypress is what made held-down resize keys stutter.
     state_dirty: bool,
     last_state_save: Instant,
+    last_saved_volume: f32,
 
     last_click: Option<(Region, Instant)>,
 
@@ -406,6 +407,7 @@ impl App {
             drag_start_viz_height: None,
             state_dirty: false,
             last_state_save: Instant::now(),
+            last_saved_volume: 1.0,
             last_click: None,
             operations: Vec::new(),
             notifications: Vec::new(),

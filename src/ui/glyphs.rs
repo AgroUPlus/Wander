@@ -56,6 +56,8 @@ pub enum Icon {
     SourceLocal,
     SourceServer,
     SourceOnline,
+    /// Operations and active status notification indicator.
+    Thunder,
 }
 
 impl GlyphSet {
@@ -88,6 +90,7 @@ impl GlyphSet {
             (GlyphSet::Nerd, SourceLocal) => "󰋊",
             (GlyphSet::Nerd, SourceServer) => "󰒋",
             (GlyphSet::Nerd, SourceOnline) => "󰖟",
+            (GlyphSet::Nerd, Thunder) => "󰚥",
 
             (GlyphSet::Unicode, Paused) => "⏸",
             (GlyphSet::Unicode, Stopped) => "■",
@@ -115,6 +118,7 @@ impl GlyphSet {
             (GlyphSet::Unicode, SourceLocal) => "▣",
             (GlyphSet::Unicode, SourceServer) => "⌂",
             (GlyphSet::Unicode, SourceOnline) => "☁",
+            (GlyphSet::Unicode, Thunder) => "⚡",
 
             (GlyphSet::Ascii, Paused) => "=",
             (GlyphSet::Ascii, Stopped) => "#",
@@ -142,13 +146,14 @@ impl GlyphSet {
             (GlyphSet::Ascii, SourceLocal) => "L",
             (GlyphSet::Ascii, SourceServer) => "N",
             (GlyphSet::Ascii, SourceOnline) => "W",
+            (GlyphSet::Ascii, Thunder) => "~",
         }
     }
 }
 
 /// Every icon the UI can ask for, so the tests can sweep them.
 #[cfg(test)]
-pub const ALL_ICONS: [Icon; 26] = [
+pub const ALL_ICONS: [Icon; 27] = [
     Icon::Paused,
     Icon::Stopped,
     Icon::Buffering,
@@ -175,6 +180,7 @@ pub const ALL_ICONS: [Icon; 26] = [
     Icon::SourceLocal,
     Icon::SourceServer,
     Icon::SourceOnline,
+    Icon::Thunder,
 ];
 
 #[cfg(test)]
