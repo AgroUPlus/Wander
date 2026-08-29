@@ -613,9 +613,9 @@ impl AgroClient {
     /// fields, or cannot be reached — all of which leave the local `[share]` config in charge.
     /// Reports completed plays.
     ///
-    /// The server is idempotent on (account, artist, title, time), so re-sending a batch this
+    /// The server is idempotent on the `playUid` each entry carries, so re-sending a batch this
     /// client was unsure about is safe — which is what lets the outbox retry rather than having to
-    /// know whether a timed-out request actually landed.
+    /// know whether a timed-out request actually landed. See [`PendingScrobble::play_uid`].
     async fn record_scrobbles(&self, device_name: &str, plays: &[PendingScrobble]) -> Result<()> {
         let mutation = r#"
             mutation RecordScrobbles(
@@ -641,6 +641,7 @@ impl AgroClient {
                     "genre": play.genres.first(),
                     "durationSecs": play.secs as i64,
                     "playedAt": rfc3339(play.at),
+                    "playUid": play.play_uid(),
                 })
             })
             .collect();
@@ -888,6 +889,39 @@ struct PendingScrobble {
     at: i64,
 }
 
+impl PendingScrobble {
+    /// A stable name for this play, so the server can recognise a repeat of it.
+    ///
+    /// Agro used to deduplicate on (account, artist, title, time), which worked only because it
+    /// stored the play time to the second. It no longer does — an exact play time is a record of
+    /// when someone sleeps and wakes, so the server rounds it to the hour — and an hour is far too
+    /// coarse to tell four plays of one track apart. The identity therefore has to travel with the
+    /// play instead of being inferred from where it landed.
+    ///
+    /// Derived rather than random, which matters twice. The outbox retries a batch it is unsure
+    /// about, and `backfill_history` re-reads `history.jsonl` from the start if its marker is ever
+    /// lost; both must produce the same id for the same play or they stop being idempotent and
+    /// start doubling the history they were meant to protect.
+    ///
+    /// The exact second goes into the hash and never leaves this machine, which is the point: the
+    /// server gets something that distinguishes two plays without telling it when either happened.
+    fn play_uid(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        // Length-prefixed, so a title ending in the separator cannot masquerade as a different
+        // play with a different artist.
+        for field in [self.artist.as_str(), self.title.as_str()] {
+            hasher.update((field.len() as u64).to_le_bytes());
+            hasher.update(field.as_bytes());
+        }
+        hasher.update(self.at.to_le_bytes());
+        // Lowercase hex, like `sync::hash_file`. Halved to 128 bits, which is far past the point
+        // where a collision inside one account's history is worth thinking about, and keeps the
+        // column small.
+        format!("{:x}", hasher.finalize())[..32].to_string()
+    }
+}
+
 /// Records a completed play for the background task to report.
 ///
 /// Called unconditionally by the player, including when Agro is not configured — the buffer is
@@ -917,8 +951,8 @@ pub fn note_play(record: &crate::history::PlayRecord) {
 /// `history.jsonl` and counting for nothing. This offers the lot.
 ///
 /// Marked done by a file naming the account, so it runs again if the machine is later pointed at a
-/// different one. Re-running is harmless in any case: the server is idempotent on
-/// (account, artist, title, time), so a play it already holds is ignored rather than doubled.
+/// different one. Re-running is harmless in any case: every play carries a `playUid` derived from
+/// its own contents, so a play the server already holds is ignored rather than doubled.
 ///
 /// Sent in chunks because a long history is well past what one request should carry, and directly
 /// rather than through the outbox, whose bound is sized for live listening rather than a year of
@@ -1173,6 +1207,72 @@ mod tests {
         // Last second of a year, and the first of the next.
         assert_eq!(rfc3339(1_735_689_599), "2024-12-31T23:59:59Z");
         assert_eq!(rfc3339(1_735_689_600), "2025-01-01T00:00:00Z");
+    }
+}
+
+#[cfg(test)]
+mod play_uid_tests {
+    use super::*;
+
+    fn play(artist: &str, title: &str, at: i64) -> PendingScrobble {
+        PendingScrobble {
+            title: title.into(),
+            artist: artist.into(),
+            album: "An Album".into(),
+            genres: vec![],
+            secs: 200,
+            at,
+        }
+    }
+
+    /// The property the outbox and the history backfill both depend on. If this ever stops
+    /// holding, a retried batch stops being recognised as a repeat and silently doubles plays.
+    #[test]
+    fn the_same_play_always_gets_the_same_id() {
+        let a = play("Boards of Canada", "Roygbiv", 1_756_000_000);
+        let b = play("Boards of Canada", "Roygbiv", 1_756_000_000);
+        assert_eq!(a.play_uid(), b.play_uid());
+    }
+
+    /// And the property that makes on-repeat counting work: the same track twice in one hour is
+    /// two plays, not one, even though the server will file both under the same hour.
+    #[test]
+    fn two_plays_of_one_track_get_different_ids() {
+        let first = play("Boards of Canada", "Roygbiv", 1_756_000_000);
+        let second = play("Boards of Canada", "Roygbiv", 1_756_000_240);
+        assert_ne!(first.play_uid(), second.play_uid());
+    }
+
+    #[test]
+    fn different_tracks_get_different_ids() {
+        let at = 1_756_000_000;
+        assert_ne!(
+            play("Boards of Canada", "Roygbiv", at).play_uid(),
+            play("Boards of Canada", "Olson", at).play_uid()
+        );
+        assert_ne!(
+            play("Boards of Canada", "Roygbiv", at).play_uid(),
+            play("Autechre", "Roygbiv", at).play_uid()
+        );
+    }
+
+    /// Fields are length-prefixed, so a value containing what looks like a separator cannot be
+    /// rearranged into a different play with the same digest.
+    #[test]
+    fn field_boundaries_cannot_be_shifted() {
+        let at = 1_756_000_000;
+        assert_ne!(
+            play("ab", "c", at).play_uid(),
+            play("a", "bc", at).play_uid()
+        );
+    }
+
+    /// Fixed width, because it lands in a database column.
+    #[test]
+    fn the_id_is_thirty_two_hex_characters() {
+        let uid = play("A", "b", 1).play_uid();
+        assert_eq!(uid.len(), 32);
+        assert!(uid.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
 
