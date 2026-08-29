@@ -84,33 +84,32 @@ pub struct ShareConfig {
     pub hosts: Vec<String>,
 }
 
-/// Sending this machine's local music to Agro.
+/// Device sync and archiving settings for Agro.
 ///
 /// Separate from [`AgroConfig`] because it is a separate decision: pairing with Agro was about
-/// playback handoff, and uploading a music collection to a server is not something to start doing
-/// because handoff was switched on.
+/// playback handoff, and sync/archiving is configured on its own.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncConfig {
-    /// Off unless asked for. Nothing is uploaded while this is false.
-    pub enabled: bool,
-    /// Hash and report local files even with `enabled` off.
-    ///
-    /// Worth doing on its own: it is what lets Agro answer "that machine has a track you don't"
-    /// without a single byte of audio leaving this one.
-    pub report_holdings: bool,
-    /// Files hashed per pass. Hashing reads every byte, so this is the knob for how much disk IO
-    /// a single sync run is allowed to cost.
+    /// P2P device sync: hash and report local holdings for direct device-to-device transfers.
+    /// Zero server storage used. Default: true.
+    #[serde(alias = "report_holdings")]
+    pub p2p_sync: bool,
+    /// Upload local audio files to the Agro / Navidrome server storage.
+    /// Admin-only. Default: false.
+    #[serde(alias = "enabled")]
+    pub server_archive: bool,
+    /// Files hashed per pass.
     pub hash_batch: usize,
-    /// Files uploaded per pass.
+    /// Files uploaded per pass (when server_archive is enabled).
     pub upload_batch: usize,
 }
 
 impl Default for SyncConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
-            report_holdings: true,
+            p2p_sync: true,
+            server_archive: false,
             hash_batch: 200,
             upload_batch: 25,
         }
@@ -508,6 +507,37 @@ impl Column {
     }
 }
 
+/// Takes the config away from the group and the world.
+///
+/// `password` and `agro.passphrase` are stored here in plaintext whenever the keyring is not in
+/// use — [`Config::password`] *prefers* the keyring but falls back to this file, so it cannot be
+/// assumed empty. A default umask leaves it world-readable, which on a shared machine hands every
+/// other account the Navidrome password and the Agro pairing passphrase.
+///
+/// Best effort: a failure is not fatal. Refusing to start over a chmod would break the program on
+/// filesystems that have no modes to set.
+#[cfg(unix)]
+fn restrict_permissions(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode == 0o600 {
+        return;
+    }
+    if let Err(error) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+        eprintln!(
+            "wander: could not restrict permissions on {}: {error}",
+            path.display()
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &std::path::Path) {}
+
 impl Config {
     pub fn path() -> Result<PathBuf> {
         Ok(crate::paths::config_dir()?.join("config.toml"))
@@ -519,6 +549,10 @@ impl Config {
         if !path.exists() {
             return Ok(Self::default());
         }
+        // Older configs were written before the mode was enforced, and a hand-edited one picks up
+        // whatever the user's umask gives it. Narrowed on the way in rather than only on the way
+        // out, so a file that has been sitting readable does not stay that way until the next save.
+        restrict_permissions(&path);
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading config at {}", path.display()))?;
         let mut config: Self = toml::from_str(&text)
@@ -547,6 +581,9 @@ impl Config {
         let temp = path.with_extension("toml.new");
         std::fs::write(&temp, text)
             .with_context(|| format!("writing config at {}", temp.display()))?;
+        // Narrowed before the rename, not after: `rename` carries the mode with it, so setting it
+        // here means the file is never observable at a wider mode, even briefly.
+        restrict_permissions(&temp);
         std::fs::rename(&temp, &path).with_context(|| {
             format!("replacing config at {}", path.display())
         })
@@ -558,6 +595,32 @@ impl Config {
             return Ok(self.server.password.clone());
         }
         crate::paths::keyring_password(&self.server.username)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod permission_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn a_widely_readable_config_is_narrowed() {
+        let dir = std::env::temp_dir().join(format!("wander-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        restrict_permissions(&path);
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config is {mode:o}, not 0600");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_file_is_not_an_error() {
+        restrict_permissions(std::path::Path::new("/nonexistent/wander/config.toml"));
     }
 }
 

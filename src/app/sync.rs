@@ -17,7 +17,7 @@ use crate::integrations::sync::{hash_file, SyncClient, UploadOutcome};
 use crate::ui::overlay::{Overlay, SyncState};
 
 /// How many missing tracks to ask about at once.
-const OFFER_LIMIT: i64 = 200;
+const OFFER_LIMIT: i64 = 1000;
 
 impl App {
     /// Whether Agro is paired and sync is configured at all.
@@ -156,7 +156,7 @@ impl App {
         };
 
         let config = self.config.sync.clone();
-        if !config.enabled && !config.report_holdings {
+        if !config.p2p_sync && !config.server_archive {
             self.push_notification(NotificationLevel::Warning, "Library sync is switched off");
             return;
         }
@@ -400,16 +400,39 @@ impl App {
             return;
         }
         // Nothing can be offered if this machine never says what it holds.
-        if !self.config.sync.report_holdings && !self.config.sync.enabled {
+        if !self.config.sync.p2p_sync && !self.config.sync.server_archive {
             return;
         }
         let Some(client) = self.sync_client() else {
             return;
         };
 
+        if let Some(local) = self.library_root.as_ref().and_then(|root| root.local()) {
+            crate::integrations::p2p_server::GLOBAL_INDEX.update(&local.index().tracks);
+        }
+
+        // Spawn embedded P2P server for local high-speed transfers
+        let _ = crate::integrations::p2p_server::P2PServer::spawn(
+            8701,
+            crate::integrations::p2p_server::GLOBAL_INDEX.clone(),
+        );
+
+        let agro_client = crate::integrations::agro::AgroClient::new(
+            agro.server.clone(),
+            agro.username.clone(),
+            agro.passphrase.clone(),
+            agro.device_id.clone(),
+        );
+        let petname = agro.device_name.clone();
+        tokio::spawn(async move {
+            let _ = agro_client.register_node(petname.as_deref(), None).await;
+        });
+
         let mut messages =
             crate::integrations::agro_ws::spawn(&agro.server, &agro.passphrase, &agro.device_id, Some(&agro.username));
         let loads = self.loads.clone();
+        let agro_server = agro.server.clone();
+        let agro_passphrase = agro.passphrase.clone();
 
         tokio::spawn(async move {
             use crate::integrations::agro_ws::LiveMessage;
@@ -443,6 +466,44 @@ impl App {
                             }
                         }
                     }
+                    LiveMessage::RelayRequest { session_id, content_hash, .. } => {
+                        // Every failure here used to be silent: a hash the index did not know was
+                        // ignored without a word, and a refused upload was discarded by `let _ =`.
+                        // The device waiting at the other end has no way to tell either of those
+                        // from a slow transfer, so it simply timed out having received nothing.
+                        match crate::integrations::p2p_server::GLOBAL_INDEX.get_path(&content_hash) {
+                            Some(file_path) => {
+                                let server = agro_server.clone();
+                                let loads = loads.clone();
+                                // Read straight from the stored device token rather than through
+                                // `ACTIVE_CLIENT`, which is not guaranteed to be set by the time
+                                // this task runs — when it is not, the fallback is the config's
+                                // `passphrase` field, and that field is *empty* on a device paired
+                                // by token. An empty bearer is a 401, which is what every relayed
+                                // transfer got.
+                                let token = crate::integrations::agro::cached_token()
+                                    .unwrap_or_else(|| agro_passphrase.clone());
+                                tokio::spawn(async move {
+                                    if let Err(error) = crate::integrations::p2p_server::send_relay_stream(
+                                        &server, &token, &session_id, file_path,
+                                    )
+                                    .await
+                                    {
+                                        let _ = loads.send(LoadEvent::Error(format!(
+                                            "Relay send failed: {error:#}"
+                                        )));
+                                    }
+                                });
+                            }
+                            None => {
+                                let _ = loads.send(LoadEvent::Error(format!(
+                                    "Another device asked for a track this one cannot find \
+                                     (hash {}). Its library index may not have been built yet.",
+                                    &content_hash[..8.min(content_hash.len())]
+                                )));
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -465,7 +526,7 @@ async fn run_pass(
     };
 
     // ── Hash ────────────────────────────────────────────────────────────────────────────────
-    // Loop in batches until all unhashed tracks are hashed, updating progress and saving after each batch.
+    // Loop in batches until all unhashed tracks are hashed, updating progress after each file.
     let total_to_hash = local.index().tracks.iter().filter(|t| t.content_hash.is_none()).count();
     let mut total_hashed_so_far = 0usize;
 
@@ -475,8 +536,8 @@ async fn run_pass(
             .tracks
             .iter()
             .filter(|t| t.content_hash.is_none())
-            .take(config.hash_batch.max(1))
-            .map(|t| t.path.clone())
+            .take(config.hash_batch.max(10))
+            .map(|t| (t.path.clone(), t.title.clone()))
             .collect();
 
         if unhashed.is_empty() {
@@ -484,47 +545,42 @@ async fn run_pass(
         }
 
         let batch_len = unhashed.len();
-        let remaining = total_to_hash.saturating_sub(total_hashed_so_far);
-        let fraction = if total_to_hash > 0 {
-            0.3 * (total_hashed_so_far as f32 / total_to_hash as f32)
-        } else {
-            0.0
-        };
-        progress(
-            fraction,
-            format!("Hashing {} files ({} remaining)…", batch_len, remaining),
-        );
+        let mut batch_results = Vec::with_capacity(batch_len);
 
-        let hashed = tokio::task::spawn_blocking(move || {
-            unhashed
-                .into_iter()
-                .filter_map(|path| hash_file(&path).ok().map(|hash| (path, hash)))
-                .collect::<Vec<_>>()
-        })
-        .await?;
+        for (path, title) in unhashed {
+            let cur = total_hashed_so_far + 1;
+            let fraction = if total_to_hash > 0 {
+                0.7 * (cur as f32 / total_to_hash as f32)
+            } else {
+                0.7
+            };
+            progress(
+                fraction,
+                format!("Hashing [{cur}/{total_to_hash}] {title}"),
+            );
 
-        if hashed.is_empty() {
+            let p_clone = path.clone();
+            let hash_opt = tokio::task::spawn_blocking(move || hash_file(&p_clone).ok()).await?;
+            if let Some(hash) = hash_opt {
+                batch_results.push((path, hash));
+                summary.hashed += 1;
+                total_hashed_so_far += 1;
+            }
+        }
+
+        if batch_results.is_empty() {
             // Failed to hash any file in the batch (e.g. unreadable/deleted files)
             break;
         }
 
-        let hashed_count = hashed.len();
-        summary.hashed += hashed_count;
-        total_hashed_so_far += hashed_count;
-
         let mut index = (*local.index()).clone();
-        for (path, hash) in hashed {
+        for (path, hash) in batch_results {
             if let Some(track) = index.tracks.iter_mut().find(|t| t.path == path) {
                 track.content_hash = Some(hash);
             }
         }
         let _ = index.save();
         local.set_index(index);
-
-        if hashed_count < batch_len {
-            // Some files in the batch could not be read; stop to avoid an infinite loop
-            break;
-        }
     }
 
     summary.remaining = local
@@ -536,19 +592,21 @@ async fn run_pass(
 
     // ── Report ──────────────────────────────────────────────────────────────────────────────
     let index = local.index();
+    crate::integrations::p2p_server::GLOBAL_INDEX.update(&index.tracks);
     let hashed: Vec<&crate::library::local::index::LocalTrack> = index
         .tracks
         .iter()
         .filter(|t| t.content_hash.is_some())
         .collect();
 
-    if config.report_holdings && !hashed.is_empty() {
-        progress(0.35, format!("Reporting {} tracks to Agro…", hashed.len()));
+    if config.p2p_sync && !hashed.is_empty() {
+        progress(0.85, format!("Reporting {} tracks to Agro…", hashed.len()));
         client.report_holdings(&hashed).await?;
+        progress(1.0, format!("Holdings reported ({})", hashed.len()));
     }
 
-    // ── Upload ──────────────────────────────────────────────────────────────────────────────
-    if config.enabled && !hashed.is_empty() {
+    // ── Upload (Server Archiving / Admin only) ───────────────────────────────────────────────
+    if config.server_archive && !hashed.is_empty() {
         let total_tracks = hashed.len();
         let max_uploads = config.upload_batch.max(1);
 
@@ -560,7 +618,7 @@ async fn run_pass(
             let fraction = 0.35 + 0.65 * (idx as f32 / total_tracks as f32);
             progress(
                 fraction,
-                format!("Checking / sending: {}", track.title),
+                format!("Archiving to server: {}", track.title),
             );
 
             match client.upload(track).await {

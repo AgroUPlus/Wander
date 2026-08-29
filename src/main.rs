@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
     // path: it resolves in the background and only affects the next link that gets shared.
     app.refresh_share_domain();
 
-    if app.config.agro.enabled && (app.config.sync.report_holdings || app.config.sync.enabled) {
+    if app.config.agro.enabled && (app.config.sync.p2p_sync || app.config.sync.server_archive) {
         app.sync_library();
         app.check_sync_offers();
         app.check_reclaimable();
