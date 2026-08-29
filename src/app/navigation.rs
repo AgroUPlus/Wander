@@ -167,7 +167,6 @@ impl App {
                 #[cfg(feature = "nyaa")]
                 OnlineSource::Nyaa => self.nyaa_plugin.results.len(),
                 OnlineSource::Archive => self.archive_plugin.results.len(),
-                OnlineSource::Jamendo => self.jamendo_plugin.results.len(),
             },
             Pane::Settings => crate::ui::settings::rows(&self.config).len(),
             Pane::Operations => self.operations.len(),
@@ -207,7 +206,6 @@ impl App {
                 #[cfg(feature = "nyaa")]
                 OnlineSource::Nyaa => &mut self.nyaa_plugin.selection,
                 OnlineSource::Archive => &mut self.archive_plugin.selection,
-                OnlineSource::Jamendo => &mut self.jamendo_plugin.selection,
             },
             Pane::Settings => &mut self.settings_sel,
             Pane::Operations => &mut self.operations_sel,
@@ -314,16 +312,11 @@ impl App {
                     self.config.plugins.archive.primary_action,
                     Self::stream_selected_archive_item as fn(&mut Self),
                 ),
-                OnlineSource::Jamendo => (
-                    self.config.plugins.jamendo.primary_action,
-                    Self::stream_selected_jamendo_track as fn(&mut Self),
-                ),
             };
             let download: fn(&mut Self) = match self.online_source {
                 #[cfg(feature = "nyaa")]
                 OnlineSource::Nyaa => Self::download_selected_nyaa_item,
                 OnlineSource::Archive => Self::download_selected_archive_item,
-                OnlineSource::Jamendo => Self::download_selected_jamendo_track,
             };
             if action == crate::config::OnlinePrimaryAction::Stream {
                 stream(self);

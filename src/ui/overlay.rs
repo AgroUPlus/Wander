@@ -75,7 +75,7 @@ pub const SETUP_CHOICES: &[(&str, &str)] = &[
     ),
     (
         "Explore Online Plugins",
-        "Stream & download free music via Internet Archive & Jamendo.",
+        "Stream & download free music via the Internet Archive.",
     ),
 ];
 

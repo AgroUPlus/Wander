@@ -48,7 +48,7 @@ impl Tab {
     pub fn available(config: &crate::config::Config) -> Vec<Tab> {
         let mut tabs = vec![Tab::Home, Tab::Queue, Tab::Library];
         #[allow(unused_mut)]
-        let mut any_plugin = config.plugins.archive.enabled || config.plugins.jamendo.enabled;
+        let mut any_plugin = config.plugins.archive.enabled;
         #[cfg(feature = "nyaa")]
         {
             any_plugin = any_plugin || config.plugins.nyaa.enabled;
@@ -85,7 +85,6 @@ pub enum OnlineSource {
     #[cfg(feature = "nyaa")]
     Nyaa,
     Archive,
-    Jamendo,
 }
 
 impl OnlineSource {
@@ -94,7 +93,6 @@ impl OnlineSource {
             #[cfg(feature = "nyaa")]
             OnlineSource::Nyaa => "nyaa.si",
             OnlineSource::Archive => "Internet Archive",
-            OnlineSource::Jamendo => "Jamendo",
         }
     }
 
@@ -107,9 +105,6 @@ impl OnlineSource {
         }
         if config.plugins.archive.enabled {
             sources.push(OnlineSource::Archive);
-        }
-        if config.plugins.jamendo.enabled {
-            sources.push(OnlineSource::Jamendo);
         }
         sources
     }
@@ -307,11 +302,6 @@ pub enum LoadEvent {
     ArchiveItemFiles {
         identifier: String,
         files: Option<Vec<crate::plugins::archive::ArchiveFile>>,
-    },
-    JamendoResults(Result<Vec<crate::plugins::jamendo::JamendoTrack>, String>),
-    JamendoDownloadFinished {
-        title: String,
-        result: Result<std::path::PathBuf, String>,
     },
     /// Tracks of an Archive item, resolved to direct stream URLs.
     ArchiveStreamReady(Result<Vec<Song>, String>),

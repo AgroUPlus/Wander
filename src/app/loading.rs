@@ -400,13 +400,6 @@ impl App {
             LoadEvent::ArchiveResults(result) => {
                 apply_plugin_search!(self, archive_plugin, "Archive", result, results, files)
             }
-            LoadEvent::JamendoResults(result) => {
-                apply_plugin_search!(self, jamendo_plugin, "Jamendo", result, results)
-            }
-            LoadEvent::JamendoDownloadFinished { title, result } => {
-                self.jamendo_plugin.working = false;
-                self.finish_plugin_download("jamendo-dl", "Jamendo", &title, result);
-            }
             LoadEvent::ArchiveItemFiles { identifier, files } => {
                 self.archive_plugin.pending.remove(&identifier);
                 self.archive_plugin.files.insert(identifier, files);
