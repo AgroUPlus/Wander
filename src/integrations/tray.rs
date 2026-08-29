@@ -63,15 +63,10 @@ impl WanderTray {
         tray
     }
 
-    /// Re-reads the player. Returns whether anything the user can see actually changed.
-    fn refresh(&mut self) -> bool {
-        let paused = self.player.is_paused();
-        let title = now_playing(&self.player);
-
-        let changed = title != self.title || paused != self.paused;
-        self.title = title;
-        self.paused = paused;
-        changed
+    /// Re-reads the player into the fields the menu and tooltip are built from.
+    fn refresh(&mut self) {
+        self.title = now_playing(&self.player);
+        self.paused = self.player.is_paused();
     }
 }
 
@@ -181,9 +176,14 @@ pub async fn spawn(player: PlayerHandle) -> Result<()> {
             }
             last = Some(now);
 
-            handle.update(|tray: &mut WanderTray| {
-                tray.refresh();
-            });
+            // Awaited. `Handle::update` is async, and a future that is built and dropped does
+            // nothing at all: the icon kept whatever it read at startup, so the title never
+            // followed the track and the button never left "Play".
+            handle
+                .update(|tray: &mut WanderTray| {
+                    tray.refresh();
+                })
+                .await;
         }
     });
 
