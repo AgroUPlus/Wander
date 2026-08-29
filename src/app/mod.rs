@@ -459,12 +459,17 @@ impl App {
     }
 
     pub fn add_operation(&mut self, op: Operation) {
+        if let Some(existing) = self.operations.iter_mut().rev().find(|o| o.id == op.id && o.status == OperationStatus::Running) {
+            existing.details = op.details;
+            existing.started_at = op.started_at;
+            return;
+        }
         self.operations.push(op);
         self.operations_sel.clamp(self.operations.len());
     }
 
     pub fn update_operation_progress(&mut self, id: &str, progress: f32, details: Option<String>) {
-        if let Some(op) = self.operations.iter_mut().find(|o| o.id == id) {
+        if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id && o.status == OperationStatus::Running) {
             op.progress = Some(progress);
             if details.is_some() {
                 op.details = details;
@@ -473,7 +478,9 @@ impl App {
     }
 
     pub fn finish_operation(&mut self, id: &str, status: OperationStatus) {
-        if let Some(op) = self.operations.iter_mut().find(|o| o.id == id) {
+        if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id && o.status == OperationStatus::Running) {
+            op.status = status;
+        } else if let Some(op) = self.operations.iter_mut().rev().find(|o| o.id == id) {
             op.status = status;
         }
     }

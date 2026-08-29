@@ -487,6 +487,21 @@ fn draw_sync(frame: &mut Frame, area: Rect, state: &SyncState, theme: &Theme) {
                 ),
                 theme.title(),
             ));
+
+            if let Some(track) = state.missing.get(state.cursor) {
+                let source_desc = if let Some(source) = track.peer_sources.first() {
+                    if source.lan_address.is_some() {
+                        format!("Source: {} · P2P Direct (Local network)", source.petname)
+                    } else if source.is_server_archive {
+                        "Source: Server · Permanent archive".to_string()
+                    } else {
+                        format!("Source: {} · Relay (Server stream)", source.petname)
+                    }
+                } else {
+                    "Source: Peer Device".to_string()
+                };
+                lines.push(Line::styled(source_desc, theme.dim()));
+            }
             lines.push(Line::raw(""));
 
             // The whole list, scrolled — not three names and a count. Deciding whether to pull
@@ -916,6 +931,7 @@ mod tests {
             album: None,
             duration_ms: 0,
             size_bytes: size,
+            peer_sources: Vec::new(),
         }
     }
 

@@ -97,34 +97,32 @@ impl App {
                 let _ = self.config.save();
             }
 
-            SettingItem::SyncEnabled => {
+            SettingItem::SyncP2p => {
                 if !self.config.agro.enabled {
                     self.push_notification(NotificationLevel::Warning, "Pair with Agro first");
                     return;
                 }
-                self.config.sync.enabled = !self.config.sync.enabled;
+                self.config.sync.p2p_sync = !self.config.sync.p2p_sync;
                 let _ = self.config.save();
-                let message = if self.config.sync.enabled {
-                    // Say where the files go: "upload my music" is a big enough thing to do that
-                    // it should not be a silent toggle.
-                    "Uploading local music to Agro on each sync pass"
+                let message = if self.config.sync.p2p_sync {
+                    "P2P device sync on — shares library index for direct transfers"
                 } else {
-                    "Uploads off — no audio leaves this machine"
+                    "P2P sync off — this machine will not share holdings or receive offers"
                 };
                 self.push_notification(NotificationLevel::Info, message);
             }
 
-            SettingItem::SyncReportHoldings => {
+            SettingItem::SyncServerArchive => {
                 if !self.config.agro.enabled {
                     self.push_notification(NotificationLevel::Warning, "Pair with Agro first");
                     return;
                 }
-                self.config.sync.report_holdings = !self.config.sync.report_holdings;
+                self.config.sync.server_archive = !self.config.sync.server_archive;
                 let _ = self.config.save();
-                let message = if self.config.sync.report_holdings {
-                    "Reporting what this machine holds — metadata only"
+                let message = if self.config.sync.server_archive {
+                    "Server archiving ON — uploads audio files to server storage (Admin only)"
                 } else {
-                    "Not reporting holdings — Agro cannot offer you what you are missing"
+                    "Server archiving OFF — audio files stay local, P2P direct only"
                 };
                 self.push_notification(NotificationLevel::Info, message);
             }

@@ -113,9 +113,9 @@ fn draw_operations_list(frame: &mut Frame, area: Rect, app: &mut App, theme: &Th
                 OperationStatus::Cancelled => "Cancelled".to_string(),
             };
 
-            let title_padded = format!("{:<30}", crate::ui::widgets::truncate(&op.title, 30));
+            let title_padded = format!("{:<22}", crate::ui::widgets::truncate(&op.title, 22));
             let detail_text = op.details.as_deref().unwrap_or("");
-            let detail_padded = format!("{:<25}", crate::ui::widgets::truncate(detail_text, 25));
+            let detail_padded = format!("{:<40}", crate::ui::widgets::truncate(detail_text, 40));
 
             let item_line = Line::from(vec![
                 Span::styled(if is_selected { "❯ " } else { "  " }, theme.title()),

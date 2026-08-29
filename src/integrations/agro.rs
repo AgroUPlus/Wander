@@ -80,6 +80,8 @@ pub fn namespaced_id(song_id: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct RemoteHandoff {
     pub track_uri: String,
+    /// How long the track is. 0 when the sender did not say, or when it is a livestream.
+    pub duration_ms: i64,
     pub track_title: String,
     pub artist_name: String,
     pub album_name: Option<String>,
@@ -133,6 +135,12 @@ impl RemoteFreshness {
     fn forget(&mut self) {
         self.seen = None;
         self.unchanged_since = None;
+    }
+
+    /// Whether a remote session is currently being followed, so it can be dropped once without
+    /// taking the store's write lock on every pass of a two-second loop.
+    fn is_tracking(&self) -> bool {
+        self.seen.is_some()
     }
 }
 
@@ -251,6 +259,21 @@ impl AgroClient {
     /// when device tokens arrived, so leading with it means a guaranteed 401 before every first
     /// request. It is still tried, because a config written by the dashboard's pairing snippet
     /// puts a device token in that same field.
+    /// The credential this client authenticates with, without the `Bearer ` prefix.
+    ///
+    /// Exposed because the relay sender is not a method on this client but still has to present
+    /// the same credential. It used to be handed the raw `passphrase` field from the config, which
+    /// the WebSocket tolerates — that route allows an unauthenticated socket — while the relay's
+    /// upload leg does not, so every relayed transfer was refused with a 401 that nothing logged.
+    pub async fn bearer_credential(&self) -> String {
+        let read = self.token.read().await;
+        if let Some(tok) = read.as_ref() {
+            return tok.clone();
+        }
+        drop(read);
+        self.passphrase.trim().to_string()
+    }
+
     async fn auth_header(&self) -> String {
         let read = self.token.read().await;
         if let Some(tok) = read.as_ref() {
@@ -355,9 +378,12 @@ impl AgroClient {
     }
 
     pub async fn register_node(&self, device_name: Option<&str>, current_track: Option<&str>) -> Result<Option<String>> {
+        let lan_address = crate::integrations::p2p_server::detect_local_ip()
+            .map(|ip| format!("{ip}:8701"));
+
         let mutation = r#"
-            mutation RegisterNode($userId: String!, $deviceId: String!, $clientType: String!, $deviceName: String, $currentTrack: String) {
-                registerNode(userId: $userId, deviceId: $deviceId, clientType: $clientType, deviceName: $deviceName, currentTrack: $currentTrack) {
+            mutation RegisterNode($userId: String!, $deviceId: String!, $clientType: String!, $deviceName: String, $lanAddress: String, $currentTrack: String) {
+                registerNode(userId: $userId, deviceId: $deviceId, clientType: $clientType, deviceName: $deviceName, lanAddress: $lanAddress, currentTrack: $currentTrack) {
                     petname
                 }
             }
@@ -370,6 +396,7 @@ impl AgroClient {
                 "deviceId": self.device_id,
                 "clientType": "wander",
                 "deviceName": device_name,
+                "lanAddress": lan_address,
                 "currentTrack": current_track,
             }
         });
@@ -394,6 +421,7 @@ impl AgroClient {
         artist: &str,
         album: Option<&str>,
         position_ms: i64,
+        duration_ms: i64,
         is_playing: bool,
         queue: Option<Vec<HandoffQueueTrack>>,
         queue_index: Option<i32>,
@@ -412,6 +440,7 @@ impl AgroClient {
                 "artistName": artist,
                 "albumName": album,
                 "positionMs": position_ms,
+                "durationMs": duration_ms,
                 "isPlaying": is_playing,
                 "deviceId": self.device_id,
                 // Omitted on a plain heartbeat: the server keeps the queue it already has rather
@@ -456,14 +485,19 @@ impl AgroClient {
     }
 
     pub async fn fetch_latest_handoff(&self) -> Result<Option<RemoteHandoff>> {
+        // `excludeDevice` is what makes this "what is the *rest of* the fleet playing". The
+        // account holds one handoff row per device, and this process writes one of them: without
+        // the filter the server would hand back whatever was reported last, which — the moment
+        // you pause here — is this machine's own paused state.
         let query = r#"
-            query GetHandoff($userId: String!) {
-                playbackHandoff(userId: $userId) {
+            query GetHandoff($userId: String!, $excludeDevice: String) {
+                playbackHandoff(userId: $userId, excludeDevice: $excludeDevice) {
                     trackUri
                     trackTitle
                     artistName
                     albumName
                     positionMs
+                    durationMs
                     isPlaying
                     deviceId
                 }
@@ -473,7 +507,8 @@ impl AgroClient {
         let body = json!({
             "query": query,
             "variables": {
-                "userId": self.username
+                "userId": self.username,
+                "excludeDevice": self.device_id
             }
         });
 
@@ -491,6 +526,7 @@ impl AgroClient {
             let artist_name = h.get("artistName").and_then(|v| v.as_str()).unwrap_or_default().to_string();
             let album_name = h.get("albumName").and_then(|v| v.as_str()).map(String::from);
             let position_ms = h.get("positionMs").and_then(|v| v.as_i64()).unwrap_or_default();
+            let duration_ms = h.get("durationMs").and_then(|v| v.as_i64()).unwrap_or_default();
             let is_playing = h.get("isPlaying").and_then(|v| v.as_bool()).unwrap_or_default();
             let device_id = h.get("deviceId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
 
@@ -498,6 +534,7 @@ impl AgroClient {
                 let petname = format!("Node {}", &device_id);
                 return Ok(Some(RemoteHandoff {
                     track_uri,
+                    duration_ms,
                     track_title,
                     artist_name,
                     album_name,
@@ -697,6 +734,7 @@ pub async fn announce_stopped(player: &PlayerHandle) {
             song.artist.as_deref().unwrap_or("Unknown Artist"),
             song.album.as_deref(),
             position_ms,
+            song.duration as i64 * 1000,
             false,
             None,
             None,
@@ -934,6 +972,10 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
 
         loop {
             let status = player.status();
+            // Not "is a track loaded here" — "is one *playing* here". A paused desktop is exactly
+            // when the fleet's session is the interesting one, and the old shape stopped asking
+            // for it at that moment.
+            let playing_here = status.current.is_some() && !player.is_paused();
             if let Some(song) = status.current.clone() {
                 let elapsed = player.elapsed();
                 let paused = player.is_paused();
@@ -949,6 +991,10 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                     last_update_time = std::time::Instant::now();
 
                     let position_ms = (elapsed.as_secs_f64() * 1000.0) as i64;
+                    // What the *player* reports, not what the metadata claimed — the same
+                    // distinction the strip's progress bar makes. 0 for a livestream, which is
+                    // the honest answer rather than a bar that never fills.
+                    let duration_ms = song.duration as i64 * 1000;
                     let client_ref = Arc::clone(&client);
 
                     // The queue only travels when it can have changed. A periodic position
@@ -986,6 +1032,7 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                                 &artist,
                                 album.as_deref(),
                                 position_ms,
+                                duration_ms,
                                 is_playing,
                                 queue,
                                 queue_index,
@@ -993,8 +1040,11 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                             .await;
                     });
                 }
-            } else {
-                // If local player is idle, check remote handoff every 6 seconds
+            }
+
+            if !playing_here {
+                // Whenever this machine is not the one playing, ask what the rest of the fleet is
+                // doing — every six seconds, a third as often as this loop runs.
                 check_remote_tick += 1;
                 if check_remote_tick % 3 == 0 {
                     if let Ok(Some(remote)) = client.fetch_latest_handoff().await {
@@ -1012,6 +1062,13 @@ pub fn spawn(player: PlayerHandle, config: AgroConfig) -> Result<()> {
                         *store = None;
                     }
                 }
+            } else if remote_freshness.is_tracking() {
+                // Playback started here, so the fleet's session stops being this process's
+                // business immediately rather than at the next six-second poll — otherwise
+                // Discord shows the phone's track for a few seconds after you press play.
+                remote_freshness.forget();
+                let mut store = remote_handoff_store.write().await;
+                *store = None;
             }
 
             // Every fifth pass, so a listening session posts its plays within ten seconds without

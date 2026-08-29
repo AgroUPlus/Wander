@@ -17,41 +17,31 @@ use crate::config::Config;
 use crate::theme::Theme;
 
 /// How the settings list is grouped. Purely presentational: a header is drawn
-/// whenever the section changes between consecutive rows.
+/// How the settings list is grouped into 5 cohesive categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Section {
-    Server,
-    Local,
-    Appearance,
+    Sources,
+    Agro,
     Playback,
-    Integrations,
-    #[cfg(feature = "nyaa")]
-    PluginNyaa,
-    PluginArchive,
-    QueueColumns,
-    Keys,
+    Appearance,
+    Plugins,
 }
 
 impl Section {
     pub fn title(self) -> &'static str {
         match self {
-            Self::Server => "Server Setup (Subsonic)",
-            Self::Local => "Local Library",
+            Self::Sources => "Music Sources & Server",
+            Self::Agro => "Agro & Device Sync",
+            Self::Playback => "Audio & Playback",
             Self::Appearance => "Appearance & Layout",
-            Self::Playback => "Audio Playback",
-            Self::Integrations => "Online Integrations",
-            #[cfg(feature = "nyaa")]
-            Self::PluginNyaa => "Plugin — Nyaa.si",
-            Self::PluginArchive => "Plugin — Internet Archive",
-            Self::QueueColumns => "Queue Columns",
-            Self::Keys => "Keybindings",
+            Self::Plugins => "Integrations & Plugins",
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingItem {
-    // Server
+    // Music Sources & Server
     ServerEnabled,
     ServerUrl,
     ServerUsername,
@@ -59,23 +49,31 @@ pub enum SettingItem {
     StreamFormat,
     TestConnection,
     ReRunSetup,
-
-    // Local library
     LocalPath(usize),
     AddLocalPath,
     LocalPlaylistDir,
     ScanOnStart,
     Rescan,
-    /// Send this machine's local files to Agro, and ask what it is missing.
-    SyncLibrary,
-    /// Whether a sync pass uploads audio, or only says what this machine holds.
-    SyncEnabled,
-    /// Report holdings even with uploads off — the cheap half, metadata only.
-    SyncReportHoldings,
-    /// Trash local copies the server already holds.
-    ReclaimSpace,
 
-    // Appearance
+    // Agro & Device Sync
+    AgroEnabled,
+    AgroServer,
+    AgroUsername,
+    AgroPassphrase,
+    AgroDeviceName,
+    SyncP2p,
+    SyncServerArchive,
+    SyncLibrary,
+    ReclaimSpace,
+    AgroCentralStats,
+
+    // Audio & Playback
+    VolumeScale,
+    BufferSeconds,
+    AutoMix,
+    ClearQueue,
+
+    // Appearance & Layout
     ThemePreset,
     Glyphs,
     CoverWidth,
@@ -84,42 +82,23 @@ pub enum SettingItem {
     ShowQueue,
     ShowLyrics,
 
-    // Playback
-    VolumeScale,
-    BufferSeconds,
-    AutoMix,
-    ClearQueue,
-
-    // Integrations
+    // Integrations & Plugins
     DiscordEnabled,
     DiscordClientId,
     DiscordCoverArt,
     FetchOnlineLyrics,
     LrclibUrl,
-    AgroEnabled,
-    /// Read the Home tab's statistics from Agro instead of this machine's own play log.
-    AgroCentralStats,
-    AgroDeviceName,
-    AgroServer,
-    AgroUsername,
-    AgroPassphrase,
-
-    // Plugins
+    PluginArchiveEnabled,
+    PluginArchivePrimaryAction,
+    PluginArchiveDownloadDir,
     #[cfg(feature = "nyaa")]
     PluginNyaaEnabled,
     #[cfg(feature = "nyaa")]
     PluginNyaaPrimaryAction,
     #[cfg(feature = "nyaa")]
     PluginNyaaDownloadDir,
-    PluginArchiveEnabled,
-    PluginArchivePrimaryAction,
-    PluginArchiveDownloadDir,
-
-    // Queue columns
     QueueColumn(usize),
     AddQueueColumn,
-
-    // Keybindings
     ShowKeybindings,
 }
 
@@ -132,17 +111,28 @@ impl SettingItem {
             | Self::ServerPassword
             | Self::StreamFormat
             | Self::TestConnection
-            | Self::ReRunSetup => Section::Server,
-
-            Self::LocalPath(_)
+            | Self::ReRunSetup
+            | Self::LocalPath(_)
             | Self::AddLocalPath
             | Self::LocalPlaylistDir
             | Self::ScanOnStart
-            | Self::Rescan
+            | Self::Rescan => Section::Sources,
+
+            Self::AgroEnabled
+            | Self::AgroServer
+            | Self::AgroUsername
+            | Self::AgroPassphrase
+            | Self::AgroDeviceName
+            | Self::SyncP2p
+            | Self::SyncServerArchive
             | Self::SyncLibrary
-            | Self::SyncEnabled
-            | Self::SyncReportHoldings
-            | Self::ReclaimSpace => Section::Local,
+            | Self::ReclaimSpace
+            | Self::AgroCentralStats => Section::Agro,
+
+            Self::VolumeScale
+            | Self::BufferSeconds
+            | Self::AutoMix
+            | Self::ClearQueue => Section::Playback,
 
             Self::ThemePreset
             | Self::Glyphs
@@ -152,32 +142,22 @@ impl SettingItem {
             | Self::ShowQueue
             | Self::ShowLyrics => Section::Appearance,
 
-            Self::VolumeScale | Self::BufferSeconds | Self::AutoMix | Self::ClearQueue => {
-                Section::Playback
-            }
-
             Self::DiscordEnabled
             | Self::DiscordClientId
             | Self::DiscordCoverArt
             | Self::FetchOnlineLyrics
             | Self::LrclibUrl
-            | Self::AgroEnabled
-            | Self::AgroCentralStats
-            | Self::AgroDeviceName
-            | Self::AgroServer
-            | Self::AgroUsername
-            | Self::AgroPassphrase => Section::Integrations,
+            | Self::PluginArchiveEnabled
+            | Self::PluginArchivePrimaryAction
+            | Self::PluginArchiveDownloadDir
+            | Self::QueueColumn(_)
+            | Self::AddQueueColumn
+            | Self::ShowKeybindings => Section::Plugins,
 
             #[cfg(feature = "nyaa")]
-            Self::PluginNyaaEnabled | Self::PluginNyaaDownloadDir | Self::PluginNyaaPrimaryAction => {
-                Section::PluginNyaa
-            }
-            Self::PluginArchiveEnabled
-            | Self::PluginArchivePrimaryAction
-            | Self::PluginArchiveDownloadDir => Section::PluginArchive,
-
-            Self::QueueColumn(_) | Self::AddQueueColumn => Section::QueueColumns,
-            Self::ShowKeybindings => Section::Keys,
+            Self::PluginNyaaEnabled
+            | Self::PluginNyaaPrimaryAction
+            | Self::PluginNyaaDownloadDir => Section::Plugins,
         }
     }
 
@@ -214,76 +194,72 @@ impl SettingItem {
         matches!(self, Self::ServerPassword | Self::AgroPassphrase)
     }
 
-    /// Deliberately plain ASCII. Emoji are two columns wide but count as one
-    /// character (and `🖼️` counts as two), so the padded value column drifted
-    /// by a different amount on every row.
+    /// Deliberately plain ASCII.
     pub fn title(self) -> String {
         match self {
-            Self::ServerEnabled => "Use server".into(),
+            Self::ServerEnabled => "Use remote server".into(),
             Self::ServerUrl => "Server URL".into(),
-            Self::ServerUsername => "Username".into(),
-            Self::ServerPassword => "Password".into(),
-            Self::StreamFormat => "Audio format".into(),
+            Self::ServerUsername => "Server username".into(),
+            Self::ServerPassword => "Server password".into(),
+            Self::StreamFormat => "Stream format".into(),
             Self::TestConnection => "Test connection".into(),
-            Self::ReRunSetup => "Re-run Quickstart Wizard".into(),
+            Self::ReRunSetup => "Setup wizard".into(),
 
             Self::LocalPath(index) => format!("Music folder {}", index + 1),
             Self::AddLocalPath => "Add music folder".into(),
             Self::LocalPlaylistDir => "Playlist folder".into(),
             Self::ScanOnStart => "Scan on startup".into(),
             Self::Rescan => "Rescan library".into(),
-            Self::SyncLibrary => "Sync library with Agro".into(),
-            Self::SyncEnabled => "Upload my music".into(),
-            Self::SyncReportHoldings => "Report what I hold".into(),
-            Self::ReclaimSpace => "Free up space".into(),
 
-            Self::ThemePreset => "Theme preset".into(),
-            Self::Glyphs => "Icon set".into(),
-            Self::CoverWidth => "Cover width".into(),
-            Self::QueueWidth => "Up Next width".into(),
-            Self::ShowCover => "Show cover pane".into(),
-            Self::ShowQueue => "Show Up Next pane".into(),
-            Self::ShowLyrics => "Show lyrics pane".into(),
+            Self::AgroEnabled => "Agro connection".into(),
+            Self::AgroServer => "Agro server URL".into(),
+            Self::AgroUsername => "Agro username".into(),
+            Self::AgroPassphrase => "Connect token".into(),
+            Self::AgroDeviceName => "Device petname".into(),
+            Self::SyncP2p => "P2P device sync".into(),
+            Self::SyncServerArchive => "Archive to server".into(),
+            Self::SyncLibrary => "Sync with Agro now".into(),
+            Self::ReclaimSpace => "Free up local space".into(),
+            Self::AgroCentralStats => "Fleet statistics".into(),
 
             Self::VolumeScale => "Volume scale".into(),
             Self::BufferSeconds => "Audio buffer".into(),
             Self::AutoMix => "Auto-mix / radio".into(),
             Self::ClearQueue => "Clear queue".into(),
 
+            Self::ThemePreset => "Theme preset".into(),
+            Self::Glyphs => "Icon set".into(),
+            Self::CoverWidth => "Cover pane width".into(),
+            Self::QueueWidth => "Up Next width".into(),
+            Self::ShowCover => "Show cover pane".into(),
+            Self::ShowQueue => "Show Up Next pane".into(),
+            Self::ShowLyrics => "Show lyrics pane".into(),
+
             Self::DiscordEnabled => "Discord presence".into(),
             Self::DiscordClientId => "Discord app ID".into(),
             Self::DiscordCoverArt => "Discord cover art".into(),
-            Self::FetchOnlineLyrics => "Online lyrics (LRCLIB)".into(),
+            Self::FetchOnlineLyrics => "LRCLIB lyrics".into(),
             Self::LrclibUrl => "LRCLIB URL".into(),
-            Self::AgroEnabled => "Agro sync daemon".into(),
-            Self::AgroCentralStats => "Fleet-wide statistics".into(),
-            Self::AgroDeviceName => "Device name".into(),
-            Self::AgroServer => "Agro server URL".into(),
-            Self::AgroUsername => "Agro username".into(),
-            Self::AgroPassphrase => "Agro passphrase".into(),
+
+            Self::PluginArchiveEnabled => "Internet Archive".into(),
+            Self::PluginArchivePrimaryAction => "Archive action".into(),
+            Self::PluginArchiveDownloadDir => "Archive folder".into(),
 
             #[cfg(feature = "nyaa")]
-            Self::PluginNyaaEnabled => "Enable plugin".into(),
+            Self::PluginNyaaEnabled => "Nyaa.si plugin".into(),
             #[cfg(feature = "nyaa")]
-            Self::PluginNyaaPrimaryAction => "Default action".into(),
+            Self::PluginNyaaPrimaryAction => "Nyaa action".into(),
             #[cfg(feature = "nyaa")]
-            Self::PluginNyaaDownloadDir => "Download path".into(),
-            Self::PluginArchiveEnabled => "Enable plugin".into(),
-            Self::PluginArchivePrimaryAction => "Default action".into(),
-            Self::PluginArchiveDownloadDir => "Download path".into(),
+            Self::PluginNyaaDownloadDir => "Nyaa folder".into(),
 
-            Self::QueueColumn(index) => format!("Column {}", index + 1),
-            Self::AddQueueColumn => "Add column".into(),
-
+            Self::QueueColumn(index) => format!("Queue column {}", index + 1),
+            Self::AddQueueColumn => "Add queue column".into(),
             Self::ShowKeybindings => "View keybindings".into(),
         }
     }
 }
 
 /// Build the row list for the current config.
-///
-/// The per-item rows (music folders, queue columns) are why this is a function
-/// rather than a constant.
 pub fn rows(config: &Config) -> Vec<SettingItem> {
     let mut rows = vec![
         SettingItem::ServerEnabled,
@@ -301,10 +277,23 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::LocalPlaylistDir,
         SettingItem::ScanOnStart,
         SettingItem::Rescan,
-        SettingItem::SyncEnabled,
-        SettingItem::SyncReportHoldings,
+
+        SettingItem::AgroEnabled,
+        SettingItem::AgroServer,
+        SettingItem::AgroUsername,
+        SettingItem::AgroPassphrase,
+        SettingItem::AgroDeviceName,
+        SettingItem::SyncP2p,
+        SettingItem::SyncServerArchive,
         SettingItem::SyncLibrary,
         SettingItem::ReclaimSpace,
+        SettingItem::AgroCentralStats,
+
+        SettingItem::VolumeScale,
+        SettingItem::BufferSeconds,
+        SettingItem::AutoMix,
+        SettingItem::ClearQueue,
+
         SettingItem::ThemePreset,
         SettingItem::Glyphs,
         SettingItem::CoverWidth,
@@ -312,21 +301,15 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::ShowCover,
         SettingItem::ShowQueue,
         SettingItem::ShowLyrics,
-        SettingItem::VolumeScale,
-        SettingItem::BufferSeconds,
-        SettingItem::AutoMix,
-        SettingItem::ClearQueue,
+
         SettingItem::DiscordEnabled,
         SettingItem::DiscordClientId,
         SettingItem::DiscordCoverArt,
         SettingItem::FetchOnlineLyrics,
         SettingItem::LrclibUrl,
-        SettingItem::AgroEnabled,
-        SettingItem::AgroCentralStats,
-        SettingItem::AgroDeviceName,
-        SettingItem::AgroServer,
-        SettingItem::AgroUsername,
-        SettingItem::AgroPassphrase,
+        SettingItem::PluginArchiveEnabled,
+        SettingItem::PluginArchivePrimaryAction,
+        SettingItem::PluginArchiveDownloadDir,
     ]);
 
     #[cfg(feature = "nyaa")]
@@ -334,12 +317,6 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::PluginNyaaEnabled,
         SettingItem::PluginNyaaPrimaryAction,
         SettingItem::PluginNyaaDownloadDir,
-    ]);
-
-    rows.extend([
-        SettingItem::PluginArchiveEnabled,
-        SettingItem::PluginArchivePrimaryAction,
-        SettingItem::PluginArchiveDownloadDir,
     ]);
 
     rows.extend((0..config.queue_columns.len()).map(SettingItem::QueueColumn));
@@ -399,29 +376,31 @@ fn value_of(app: &App, item: SettingItem) -> String {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(not set — local playlists disabled)".into()),
         SettingItem::ScanOnStart => on_off(config.local.scan_on_start),
-        SettingItem::SyncEnabled => {
+        SettingItem::SyncP2p => {
             if !config.agro.enabled {
                 "pair with Agro first".into()
             } else {
-                on_off(config.sync.enabled)
+                on_off(config.sync.p2p_sync)
             }
         }
-        SettingItem::SyncReportHoldings => {
+        SettingItem::SyncServerArchive => {
             if !config.agro.enabled {
                 "pair with Agro first".into()
+            } else if config.sync.server_archive {
+                "Enabled (Admin only — uploads audio to server)".into()
             } else {
-                on_off(config.sync.report_holdings)
+                "Disabled (Direct P2P & relay only)".into()
             }
         }
         SettingItem::SyncLibrary => {
             if !config.agro.enabled {
                 "pair with Agro first".into()
-            } else if config.sync.enabled {
-                "uploading local files  [Enter to sync now]".into()
-            } else if config.sync.report_holdings {
-                "reporting what you hold, not uploading  [Enter to sync now]".into()
+            } else if config.sync.server_archive {
+                "archiving to server & P2P  [Enter to sync now]".into()
+            } else if config.sync.p2p_sync {
+                "direct P2P & relay index only  [Enter to sync now]".into()
             } else {
-                "nothing to do — both switches above are off".into()
+                "nothing to do — sync is disabled".into()
             }
         }
         SettingItem::ReclaimSpace => {
