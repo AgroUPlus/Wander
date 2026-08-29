@@ -207,6 +207,39 @@ impl SyncClient {
         Ok(count)
     }
 
+    /// Forgets holdings this device no longer has, and does not lose them if that fails.
+    ///
+    /// The hashes are written to disk *before* the call and cleared only once the server has
+    /// confirmed. Reclaiming space moves the files to the trash and then tells the server they are
+    /// gone; when that second half was a detached `tokio::spawn` whose result was discarded, one
+    /// timeout — or simply quitting before it finished — left the server permanently believing this
+    /// machine still held files that were already in the trash. It then went on offering them to
+    /// every other device, sourced from here, for ever. There was nothing left to recompute the
+    /// truth from, because the local index no longer had the files either.
+    pub async fn forget_holdings_durably(&self, hashes: &[String]) -> Result<i64> {
+        if hashes.is_empty() {
+            return Ok(0);
+        }
+        queue_forget(hashes);
+        let removed = self.forget_holdings(hashes).await?;
+        clear_forget_queue(hashes);
+        Ok(removed)
+    }
+
+    /// Retries whatever a previous run could not deliver.
+    ///
+    /// Cheap and silent when the queue is empty, which is almost always, so it can sit on a path
+    /// that runs at startup without being a startup cost.
+    pub async fn flush_pending_forget(&self) -> Result<i64> {
+        let pending = pending_forget();
+        if pending.is_empty() {
+            return Ok(0);
+        }
+        let removed = self.forget_holdings(&pending).await?;
+        clear_forget_queue(&pending);
+        Ok(removed)
+    }
+
     /// Forgets holdings this device no longer has.
     pub async fn forget_holdings(&self, hashes: &[String]) -> Result<i64> {
         if hashes.is_empty() {
@@ -794,5 +827,111 @@ mod live {
             !missing.iter().any(|t| t.title == "Breed"),
             "a track this device just reported must not come back as missing"
         );
+    }
+}
+
+/// Where undelivered "I no longer hold this" notices wait for the next attempt.
+fn forget_queue_path() -> Option<std::path::PathBuf> {
+    crate::paths::cache_dir().map(|dir| dir.join("agro-pending-forget"))
+}
+
+/// The hashes still owed to the server, if any.
+fn pending_forget() -> Vec<String> {
+    let Some(path) = forget_queue_path() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Records hashes as owed. Best effort: a queue that cannot be written is not a reason to refuse to
+/// free the space the user asked to free.
+fn queue_forget(hashes: &[String]) {
+    let Some(path) = forget_queue_path() else {
+        return;
+    };
+    let all = merge_forget(pending_forget(), hashes);
+    let _ = std::fs::write(path, all.join("\n"));
+}
+
+/// Adds what is newly owed without duplicating what already is.
+///
+/// Split from the file handling so it can be tested without a cache directory to write into.
+fn merge_forget(mut existing: Vec<String>, adding: &[String]) -> Vec<String> {
+    for hash in adding {
+        if !existing.iter().any(|seen| seen == hash) {
+            existing.push(hash.clone());
+        }
+    }
+    existing
+}
+
+/// What is still owed after the server confirmed `delivered`.
+fn remaining_forget(existing: Vec<String>, delivered: &[String]) -> Vec<String> {
+    existing
+        .into_iter()
+        .filter(|hash| !delivered.contains(hash))
+        .collect()
+}
+
+/// Drops hashes the server has now confirmed, leaving anything else still owed.
+fn clear_forget_queue(delivered: &[String]) {
+    let Some(path) = forget_queue_path() else {
+        return;
+    };
+    let remaining = remaining_forget(pending_forget(), delivered);
+    if remaining.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let _ = std::fs::write(path, remaining.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod forget_queue_tests {
+    use super::*;
+
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn queuing_the_same_hash_twice_records_it_once() {
+        let queue = merge_forget(owned(&["a", "b"]), &owned(&["b", "c"]));
+        assert_eq!(queue, owned(&["a", "b", "c"]));
+    }
+
+    /// Reclaiming twice before either delivery lands must not lose the first batch.
+    #[test]
+    fn a_second_reclaim_adds_to_the_first() {
+        let queue = merge_forget(owned(&[]), &owned(&["a"]));
+        let queue = merge_forget(queue, &owned(&["b", "c"]));
+        assert_eq!(queue, owned(&["a", "b", "c"]));
+    }
+
+    /// A partial delivery leaves the rest owed. Clearing everything on any success is how a queue
+    /// silently drops work.
+    #[test]
+    fn only_what_was_confirmed_is_cleared() {
+        let left = remaining_forget(owned(&["a", "b", "c"]), &owned(&["a", "c"]));
+        assert_eq!(left, owned(&["b"]));
+    }
+
+    #[test]
+    fn confirming_everything_empties_the_queue() {
+        assert!(remaining_forget(owned(&["a", "b"]), &owned(&["a", "b"])).is_empty());
+    }
+
+    /// A confirmation naming something never queued is not an error and changes nothing.
+    #[test]
+    fn an_unknown_confirmation_is_harmless() {
+        let left = remaining_forget(owned(&["a"]), &owned(&["z"]));
+        assert_eq!(left, owned(&["a"]));
     }
 }

@@ -221,6 +221,10 @@ impl App {
             return;
         };
         self.spawn_load(async move {
+            // Anything a previous run could not deliver goes first, so a reclaim that was
+            // interrupted stops haunting the other devices as soon as this one is online again.
+            let _ = client.flush_pending_forget().await;
+
             let mode = client.sync_mode().await.unwrap_or_default();
             if !mode.offers_reclaim() {
                 return Ok(LoadEvent::Reclaimable(Vec::new()));
@@ -271,7 +275,7 @@ impl App {
         if paths.is_empty() {
             let all_hashes: Vec<String> = tracks.into_iter().map(|t| t.content_hash).collect();
             tokio::spawn(async move {
-                let _ = client.forget_holdings(&all_hashes).await;
+                let _ = client.forget_holdings_durably(&all_hashes).await;
             });
             self.push_notification(
                 NotificationLevel::Info,
@@ -284,8 +288,10 @@ impl App {
         let count = paths.len();
         match trash::delete_all(&paths) {
             Ok(()) => {
+                // Durable: the files are in the trash whatever happens next, so losing the notice
+                // to a timeout would leave the server advertising them from here for ever.
                 tokio::spawn(async move {
-                    let _ = client.forget_holdings(&hashes).await;
+                    let _ = client.forget_holdings_durably(&hashes).await;
                 });
                 self.push_notification(
                     NotificationLevel::Success,
