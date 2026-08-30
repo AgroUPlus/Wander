@@ -166,6 +166,7 @@ pub async fn send_relay_stream(
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/octet-stream")
+        .header("X-Agro-Encrypted", "true")
         .body(body)
         .send()
         .await?;

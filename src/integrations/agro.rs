@@ -441,6 +441,56 @@ impl AgroClient {
         Ok(None)
     }
 
+    /// Publishes this account's X25519 identity public key for E2EE track drops.
+    pub async fn set_public_key(&self, public_key: &str) -> Result<bool> {
+        let mutation = r#"
+            mutation SetPublicKey($publicKey: String) {
+                setPublicKey(publicKey: $publicKey) {
+                    publicKey
+                }
+            }
+        "#;
+        let body = json!({
+            "query": mutation,
+            "variables": {
+                "publicKey": public_key.trim(),
+            }
+        });
+        let answer = self.graphql(&body).await?;
+        if let Some(msg) = answer["errors"][0]["message"].as_str() {
+            anyhow::bail!("{msg}");
+        }
+        Ok(true)
+    }
+
+    /// Purges listening history on Agro for a given year or cutoff.
+    pub async fn purge_scrobbles(&self, year: Option<i32>, before: Option<&str>) -> Result<i32> {
+        let mutation = r#"
+            mutation PurgeScrobbles($userId: String!, $year: Int, $before: String) {
+                purgeScrobbles(userId: $userId, year: $year, before: $before) {
+                    purgedCount
+                    success
+                }
+            }
+        "#;
+        let body = json!({
+            "query": mutation,
+            "variables": {
+                "userId": self.username,
+                "year": year,
+                "before": before,
+            }
+        });
+        let answer = self.graphql(&body).await?;
+        if let Some(msg) = answer["errors"][0]["message"].as_str() {
+            anyhow::bail!("{msg}");
+        }
+        let count = answer["data"]["purgeScrobbles"]["purgedCount"]
+            .as_i64()
+            .unwrap_or(0);
+        Ok(count as i32)
+    }
+
     pub async fn update_playback_state(
         &self,
         track_uri: &str,

@@ -65,6 +65,11 @@ pub struct AgroConfig {
     /// device to the fleet's totals should be a decision, not something that happens on upgrade.
     /// Plays are reported to Agro either way — the flag only decides where the Home tab reads.
     pub central_stats: bool,
+    /// X25519 identity keys for E2EE track drops and communications.
+    #[serde(default)]
+    pub identity_private_key: Option<String>,
+    #[serde(default)]
+    pub identity_public_key: Option<String>,
 }
 
 /// Where share links go out.
@@ -125,6 +130,36 @@ fn default_device_id() -> String {
 }
 
 impl AgroConfig {
+    /// Retrieves or generates X25519 identity keys for E2EE drops and relay streaming.
+    pub fn get_or_create_identity_keys(&mut self) -> (x25519_dalek::StaticSecret, x25519_dalek::PublicKey) {
+        use base64::prelude::*;
+        if let (Some(priv_b64), Some(pub_b64)) = (&self.identity_private_key, &self.identity_public_key) {
+            if let (Ok(priv_bytes), Ok(pub_bytes)) = (
+                BASE64_STANDARD.decode(priv_b64.trim()),
+                BASE64_STANDARD.decode(pub_b64.trim()),
+            ) {
+                if priv_bytes.len() == 32 && pub_bytes.len() == 32 {
+                    let mut priv_arr = [0u8; 32];
+                    let mut pub_arr = [0u8; 32];
+                    priv_arr.copy_from_slice(&priv_bytes);
+                    pub_arr.copy_from_slice(&pub_bytes);
+                    let secret = x25519_dalek::StaticSecret::from(priv_arr);
+                    let public = x25519_dalek::PublicKey::from(pub_arr);
+                    return (secret, public);
+                }
+            }
+        }
+
+        // Generate new keypair using OS CSPRNG
+        let secret = x25519_dalek::StaticSecret::random_from_rng(chacha20poly1305::aead::OsRng);
+        let public = x25519_dalek::PublicKey::from(&secret);
+
+        self.identity_private_key = Some(BASE64_STANDARD.encode(secret.to_bytes()));
+        self.identity_public_key = Some(BASE64_STANDARD.encode(public.as_bytes()));
+
+        (secret, public)
+    }
+
     /// Whether this device has anything it can authenticate with.
     ///
     /// Either credential will do, and asking about the passphrase alone is wrong: after the first
@@ -205,6 +240,8 @@ impl Default for AgroConfig {
             device_name: None,
             sync_settings: true,
             central_stats: false,
+            identity_private_key: None,
+            identity_public_key: None,
         }
     }
 }
