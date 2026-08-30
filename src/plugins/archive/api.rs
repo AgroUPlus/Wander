@@ -140,8 +140,7 @@ pub async fn search_archive(
         urlencoding::encode(&full_query)
     );
 
-    let response = client
-        .get(&url)
+    let response = crate::http::external_request(client, agro_config, reqwest::Method::GET, &url)
         .header("User-Agent", USER_AGENT)
         .send()
         .await
@@ -217,8 +216,7 @@ pub async fn item_files_and_cover(
         urlencoding::encode(identifier)
     );
 
-    let response = client
-        .get(&url)
+    let response = crate::http::external_request(client, agro_config, reqwest::Method::GET, &url)
         .header("User-Agent", USER_AGENT)
         .send()
         .await
