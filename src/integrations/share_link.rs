@@ -34,6 +34,7 @@ impl ShareDomain {
         &self,
         url: &str,
         agro: Option<&crate::integrations::agro::AgroClient>,
+        expires_ms: Option<i64>,
     ) -> String {
         if self.domain.trim().is_empty() {
             return url.to_string();
@@ -46,9 +47,9 @@ impl ShareDomain {
         }
         let domain = self.domain.trim().trim_matches('/');
 
-        // When Agro is paired, mint a short UID so all links use clean ?id=<uid>
+        // When Agro is paired, mint a short UID with synchronized TTL so all links use clean ?id=<uid>
         if let Some(agro_client) = agro {
-            if let Ok(uid) = agro_client.create_short_link(url).await {
+            if let Ok(uid) = agro_client.create_short_link(url, expires_ms).await {
                 if !uid.trim().is_empty() {
                     return format!("https://{domain}/listen?id={uid}");
                 }
