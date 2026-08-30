@@ -130,6 +130,7 @@ impl ArchiveCollection {
 
 pub async fn search_archive(
     client: &Client,
+    agro_config: Option<&crate::config::AgroConfig>,
     query: &str,
     collection: ArchiveCollection,
 ) -> Result<Vec<ArchiveItem>> {
@@ -208,6 +209,7 @@ fn flatten_field(value: &serde_json::Value) -> String {
 /// Fetch an item's playable files and best available cover image URL.
 pub async fn item_files_and_cover(
     client: &Client,
+    agro_config: Option<&crate::config::AgroConfig>,
     identifier: &str,
 ) -> Result<(Vec<ArchiveFile>, Option<String>)> {
     let url = format!(
@@ -243,8 +245,8 @@ pub async fn item_files_and_cover(
     Ok((files, cover_art))
 }
 
-pub async fn item_files(client: &Client, identifier: &str) -> Result<Vec<ArchiveFile>> {
-    item_files_and_cover(client, identifier)
+pub async fn item_files(client: &Client, agro_config: Option<&crate::config::AgroConfig>, identifier: &str) -> Result<Vec<ArchiveFile>> {
+    item_files_and_cover(client, agro_config, identifier)
         .await
         .map(|(files, _)| files)
 }
