@@ -127,8 +127,7 @@ pub async fn fetch_online_lyrics(
     const USER_AGENT: &str = "wander-tui/0.1 (https://github.com/Kolbxyz/Wander; music player)";
 
     let get_url = build_url(&format!("{base_url}/api/get"), &query);
-    if let Ok(resp) = http
-        .get(&get_url)
+    if let Ok(resp) = crate::http::external_request(http, agro_config, reqwest::Method::GET, &get_url)
         .header("User-Agent", USER_AGENT)
         .send()
         .await
@@ -147,8 +146,7 @@ pub async fn fetch_online_lyrics(
     }
     let search_url = build_url(&search_endpoint, &search_query);
 
-    if let Ok(resp) = http
-        .get(&search_url)
+    if let Ok(resp) = crate::http::external_request(http, agro_config, reqwest::Method::GET, &search_url)
         .header("User-Agent", USER_AGENT)
         .send()
         .await
@@ -171,8 +169,7 @@ pub async fn fetch_online_lyrics(
         }
         let clean_url = build_url(&search_endpoint, &clean_query);
 
-        if let Ok(resp) = http
-            .get(&clean_url)
+        if let Ok(resp) = crate::http::external_request(http, agro_config, reqwest::Method::GET, &clean_url)
             .header("User-Agent", USER_AGENT)
             .send()
             .await
