@@ -10,6 +10,7 @@
 //! that. The inbox *could* be stored — a drop is durable — but a terminal that is only running
 //! while you are looking at it gains little from it, so it is re-read on open like the rest.
 
+use base64::Engine;
 use crate::app::App;
 use crate::app::types::LoadEvent;
 use crate::integrations::agro_social::Recap;
@@ -29,12 +30,16 @@ impl App {
         let Some(client) = self.social_client() else {
             return;
         };
+        let (secret, pubkey) = self.config.agro.get_or_create_identity_keys();
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
+        let client_clone = client.clone();
         tokio::spawn(async move {
+            // Ensure our public key is published on Agro
+            let _ = client_clone.set_public_key(&base64::prelude::BASE64_STANDARD.encode(pubkey.as_bytes())).await;
             let friends = client.friends().await.unwrap_or_default();
             let feed = client.friend_activity().await.unwrap_or_default();
-            let inbox = client.inbox().await.unwrap_or_default();
+            let inbox = client.inbox(Some(&secret)).await.unwrap_or_default();
             let recap = client
                 .circle_recap(&period)
                 .await
@@ -59,18 +64,17 @@ impl App {
         let Some(drop) = self.inbox.get(self.inbox_sel).cloned() else {
             return;
         };
-        if !drop.is_unread() {
-            return;
-        }
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
+        let (secret, _) = self.config.agro.get_or_create_identity_keys();
         tokio::spawn(async move {
-            let _ = client.mark_drop_read(&drop.id).await;
-            refresh_into(client, loads, period).await;
+            if client.mark_drop_read(&drop.id).await.unwrap_or(false) {
+                refresh_into(client, loads, period, Some(secret)).await;
+            }
         });
     }
 
-    /// Takes the selected drop out of the inbox.
+    /// Archives the selected drop and removes it from the list.
     pub fn archive_selected_drop(&mut self) {
         let Some(client) = self.social_client() else {
             return;
@@ -80,10 +84,11 @@ impl App {
         };
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
-        self.status_message = Some(format!("Archived “{}”", drop.track_title));
+        let (secret, _) = self.config.agro.get_or_create_identity_keys();
         tokio::spawn(async move {
-            let _ = client.archive_drop(&drop.id).await;
-            refresh_into(client, loads, period).await;
+            if client.archive_drop(&drop.id).await.unwrap_or(false) {
+                refresh_into(client, loads, period, Some(secret)).await;
+            }
         });
     }
 
@@ -114,8 +119,12 @@ impl App {
 
     /// Sends the pending drop, with whatever note was typed.
     pub fn confirm_drop(&mut self) {
-        let note = self.drop_note_input.take().unwrap_or_default();
-        let Some(to) = self.drop_target.take() else {
+        self.submit_drop();
+    }
+
+    /// Submits the drop being typed in the modal.
+    pub fn submit_drop(&mut self) {
+        let (Some(to), Some(note)) = (self.drop_target.take(), self.drop_note_input.take()) else {
             return;
         };
         let Some(client) = self.social_client() else {
@@ -126,9 +135,16 @@ impl App {
             return;
         };
 
+        let recipient_pubkey = self
+            .friends
+            .iter()
+            .find(|f| f.username.eq_ignore_ascii_case(&to))
+            .and_then(|f| f.public_key.clone());
+
+        let (secret, _) = self.config.agro.get_or_create_identity_keys();
         let loads = self.loads.clone();
         let period = self.recap_period.clone();
-        self.status_message = Some(format!("Sending to {to}…"));
+        self.status_message = Some(format!("Sending E2EE drop to {to}…"));
         tokio::spawn(async move {
             let outcome = client
                 .drop_track(
@@ -138,12 +154,13 @@ impl App {
                     song.album.as_deref(),
                     Some(&crate::integrations::agro::namespaced_id(&song.id)),
                     Some(note.as_str()),
+                    recipient_pubkey.as_deref(),
                 )
                 .await;
             // Sent drops show in the inbox tab's own list, so the answer is worth re-reading
             // whether it succeeded or not.
             if outcome.is_ok() {
-                refresh_into(client, loads, period).await;
+                refresh_into(client, loads, period, Some(secret)).await;
             }
         });
     }
@@ -154,6 +171,22 @@ impl App {
         self.drop_target = None;
         self.status_message = None;
     }
+
+    /// Purges scrobbles for a specific year or all time from Agro.
+    pub fn purge_scrobbles(&mut self, year: Option<i32>) {
+        let Some(client) = self.social_client() else {
+            return;
+        };
+        let status = if let Some(y) = year {
+            format!("Purging scrobbles for {y}…")
+        } else {
+            "Purging all scrobbles…".to_string()
+        };
+        self.status_message = Some(status);
+        tokio::spawn(async move {
+            let _ = client.purge_scrobbles(year, None).await;
+        });
+    }
 }
 
 /// The refresh, as a free function, so the actions above can chain one after a mutation without
@@ -162,10 +195,11 @@ async fn refresh_into(
     client: std::sync::Arc<crate::integrations::agro::AgroClient>,
     loads: tokio::sync::mpsc::UnboundedSender<LoadEvent>,
     period: String,
+    secret: Option<x25519_dalek::StaticSecret>,
 ) {
     let friends = client.friends().await.unwrap_or_default();
     let feed = client.friend_activity().await.unwrap_or_default();
-    let inbox = client.inbox().await.unwrap_or_default();
+    let inbox = client.inbox(secret.as_ref()).await.unwrap_or_default();
     let recap = client.circle_recap(&period).await.unwrap_or_default();
     let _ = loads.send(LoadEvent::Social {
         friends,

@@ -74,8 +74,8 @@ struct OfferPayload {
 
 /// Opens the socket and keeps it open. The receiver yields for as long as the app runs.
 ///
-/// `token` goes in the query string rather than a header because a WebSocket handshake cannot
-/// carry custom headers in every client, and Agro accepts `?token=` for exactly that reason.
+/// Eliminates bearer tokens in the URL query string, passing credentials via HTTP Authorization
+/// headers and in-band AUTH frames to protect reverse proxy access logs.
 pub fn spawn(
     server: &str,
     token_or_pass: &str,
@@ -101,9 +101,9 @@ pub fn spawn(
             // when the process started is the wrong one by then.
             let lan_address =
                 crate::integrations::p2p_server::detect_local_ip().map(|ip| format!("{ip}:8701"));
-            let url = socket_url(&server, &active_token, &device_id, lan_address.as_deref());
+            let url = socket_url(&server, &device_id, lan_address.as_deref());
             let ok = if let Some(ref u) = url {
-                listen(u, &tx).await.is_ok()
+                listen(u, &active_token, &device_id, lan_address.as_deref(), &tx).await.is_ok()
             } else {
                 false
             };
@@ -139,11 +139,29 @@ pub fn spawn(
 /// One connection's lifetime. Returns when the socket closes, for any reason.
 async fn listen(
     url: &str,
+    token: &str,
+    device_id: &str,
+    lan_address: Option<&str>,
     tx: &mpsc::UnboundedSender<LiveMessage>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let request = url.into_client_request()?;
+    use futures_util::SinkExt;
+    let mut request = url.into_client_request()?;
+    if let Ok(header_val) = format!("Bearer {token}").parse() {
+        request.headers_mut().insert("Authorization", header_val);
+    }
     let (stream, _) = tokio_tungstenite::connect_async(request).await?;
-    let (_write, mut read) = stream.split();
+    let (mut write, mut read) = stream.split();
+
+    // Send post-handshake in-band AUTH frame for full zero-leak auth
+    let auth_msg = serde_json::json!({
+        "msg_type": "AUTH",
+        "payload": {
+            "token": token,
+            "device": device_id,
+            "lan": lan_address,
+        }
+    });
+    let _ = write.send(Message::Text(auth_msg.to_string().into())).await;
 
     while let Some(frame) = read.next().await {
         let text = match frame? {
@@ -210,19 +228,9 @@ fn parse(text: &str) -> Option<LiveMessage> {
     }
 }
 
-/// `https://host` → `wss://host/ws/sync?token=…&device=…&lan=…`.
-///
-/// `lan` is where this machine can be reached for direct peer-to-peer transfers. It travels on the
-/// handshake because the server holds it only in memory, for exactly as long as the socket lives:
-/// it used to be sent once by `registerNode` at startup, so a redeploy or a dropped connection
-/// erased it for good and transfers quietly fell back to relaying through the server. Sending it
-/// with every connection makes a reconnect restore it, which this loop already does on its own.
-///
-/// Omitted when the machine has no usable address, which is the honest answer — a peer told to
-/// connect nowhere is worse than a peer that admits it cannot be reached directly.
+/// `https://host` → `wss://host/ws/sync?device=…&lan=…`.
 fn socket_url(
     server: &str,
-    token: &str,
     device_id: &str,
     lan_address: Option<&str>,
 ) -> Option<String> {
@@ -238,8 +246,7 @@ fn socket_url(
         return None;
     }
     let mut url = format!(
-        "{base}/ws/sync?token={}&device={}",
-        urlencoding::encode(token),
+        "{base}/ws/sync?device={}",
         urlencoding::encode(device_id)
     );
     if let Some(lan) = lan_address.map(str::trim).filter(|l| !l.is_empty()) {
@@ -255,11 +262,11 @@ mod tests {
     #[test]
     fn builds_a_socket_url_from_either_scheme() {
         assert_eq!(
-            socket_url("https://agro.example.com/", "tok en", "wander-desktop", None).unwrap(),
-            "wss://agro.example.com/ws/sync?token=tok%20en&device=wander-desktop"
+            socket_url("https://agro.example.com/", "wander-desktop", None).unwrap(),
+            "wss://agro.example.com/ws/sync?device=wander-desktop"
         );
         assert!(
-            socket_url("http://127.0.0.1:1674", "t", "d", None)
+            socket_url("http://127.0.0.1:1674", "d", None)
                 .unwrap()
                 .starts_with("ws://127.0.0.1:1674/ws/sync")
         );
@@ -270,12 +277,12 @@ mod tests {
     #[test]
     fn carries_the_lan_address_when_there_is_one() {
         assert_eq!(
-            socket_url("https://a.example", "t", "d", Some("192.168.1.50:8701")).unwrap(),
-            "wss://a.example/ws/sync?token=t&device=d&lan=192.168.1.50%3A8701"
+            socket_url("https://a.example", "d", Some("192.168.1.50:8701")).unwrap(),
+            "wss://a.example/ws/sync?device=d&lan=192.168.1.50%3A8701"
         );
         assert_eq!(
-            socket_url("https://a.example", "t", "d", Some("[fe80::1]:8701")).unwrap(),
-            "wss://a.example/ws/sync?token=t&device=d&lan=%5Bfe80%3A%3A1%5D%3A8701"
+            socket_url("https://a.example", "d", Some("[fe80::1]:8701")).unwrap(),
+            "wss://a.example/ws/sync?device=d&lan=%5Bfe80%3A%3A1%5D%3A8701"
         );
     }
 
@@ -283,17 +290,17 @@ mod tests {
     #[test]
     fn omits_the_lan_address_when_there_is_none() {
         for absent in [None, Some(""), Some("   ")] {
-            let url = socket_url("https://a.example", "t", "d", absent).unwrap();
+            let url = socket_url("https://a.example", "d", absent).unwrap();
             assert!(!url.contains("lan="), "should not carry a lan param: {url}");
         }
     }
 
     #[test]
     fn refuses_an_address_that_is_not_http() {
-        assert!(socket_url("agro.example.com", "t", "d", None).is_none());
-        assert!(socket_url("ftp://agro.example.com", "t", "d", None).is_none());
-        assert!(socket_url("https://", "t", "d", None).is_none());
-        assert!(socket_url("", "t", "d", None).is_none());
+        assert!(socket_url("agro.example.com", "d", None).is_none());
+        assert!(socket_url("ftp://agro.example.com", "d", None).is_none());
+        assert!(socket_url("https://", "d", None).is_none());
+        assert!(socket_url("", "d", None).is_none());
     }
 
     #[test]

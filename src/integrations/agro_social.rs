@@ -11,12 +11,17 @@
 //! to tell the user than that it did not go.
 
 use anyhow::Result;
+use base64::prelude::*;
+use chacha20poly1305::aead::rand_core::RngCore;
+use chacha20poly1305::aead::{Aead, KeyInit, OsRng};
+use chacha20poly1305::{ChaCha20Poly1305, Nonce};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use super::agro::AgroClient;
 
 const DROP_FIELDS: &str =
-    "id fromUser toUser trackTitle artistName albumName note createdAt readAt";
+    "id fromUser toUser trackTitle artistName albumName note noteCiphertext isEncrypted createdAt readAt";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Friend {
@@ -24,6 +29,8 @@ pub struct Friend {
     pub display_name: Option<String>,
     /// What they are playing, when they let that be seen.
     pub now_playing: Option<String>,
+    /// The public identity key for E2EE drops.
+    pub public_key: Option<String>,
 }
 
 impl Friend {
@@ -44,6 +51,8 @@ pub struct Drop {
     pub track_title: String,
     pub artist_name: String,
     pub note: Option<String>,
+    pub note_ciphertext: Option<String>,
+    pub is_encrypted: bool,
     pub created_at: String,
     /// Always `None` on a drop this account sent — the server blanks it, because whether somebody
     /// opened what you gave them is information about them. Do not draw a "seen" marker from this.
@@ -54,6 +63,73 @@ impl Drop {
     pub fn is_unread(&self) -> bool {
         self.read_at.is_none()
     }
+}
+
+/// Seals a drop note to the recipient's public key using X25519-ChaCha20-Poly1305.
+pub fn seal_note(recipient_pub_b64: &str, note: &str) -> Result<String> {
+    let pub_bytes = BASE64_STANDARD.decode(recipient_pub_b64.trim())?;
+    if pub_bytes.len() != 32 {
+        anyhow::bail!("invalid recipient public key length");
+    }
+    let mut pub_arr = [0u8; 32];
+    pub_arr.copy_from_slice(&pub_bytes);
+    let recipient_pub = x25519_dalek::PublicKey::from(pub_arr);
+
+    let ephemeral_secret = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+    let ephemeral_public = x25519_dalek::PublicKey::from(&ephemeral_secret);
+
+    let shared_secret = ephemeral_secret.diffie_hellman(&recipient_pub);
+    let mut hasher = Sha256::new();
+    hasher.update(shared_secret.as_bytes());
+    let key_bytes = hasher.finalize();
+
+    let cipher = ChaCha20Poly1305::new_from_slice(&key_bytes)
+        .map_err(|e| anyhow::anyhow!("cipher init error: {e}"))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, note.as_bytes())
+        .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
+
+    let mut payload = Vec::with_capacity(32 + 12 + ciphertext.len());
+    payload.extend_from_slice(ephemeral_public.as_bytes());
+    payload.extend_from_slice(&nonce_bytes);
+    payload.extend_from_slice(&ciphertext);
+
+    Ok(BASE64_STANDARD.encode(payload))
+}
+
+/// Opens an encrypted drop note using the local private identity key.
+pub fn open_note(my_secret: &x25519_dalek::StaticSecret, ciphertext_b64: &str) -> Result<String> {
+    let payload = BASE64_STANDARD.decode(ciphertext_b64.trim())?;
+    if payload.len() < 32 + 12 + 16 {
+        anyhow::bail!("ciphertext payload too short");
+    }
+
+    let mut ephemeral_pub_bytes = [0u8; 32];
+    ephemeral_pub_bytes.copy_from_slice(&payload[0..32]);
+    let ephemeral_pub = x25519_dalek::PublicKey::from(ephemeral_pub_bytes);
+
+    let nonce_bytes = &payload[32..44];
+    let ciphertext = &payload[44..];
+
+    let shared_secret = my_secret.diffie_hellman(&ephemeral_pub);
+    let mut hasher = Sha256::new();
+    hasher.update(shared_secret.as_bytes());
+    let key_bytes = hasher.finalize();
+
+    let cipher = ChaCha20Poly1305::new_from_slice(&key_bytes)
+        .map_err(|e| anyhow::anyhow!("cipher init error: {e}"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|e| anyhow::anyhow!("decryption failed: {e}"))?;
+
+    Ok(String::from_utf8(plaintext)?)
 }
 
 /// One line of the activity feed.
@@ -82,14 +158,33 @@ fn string(value: &serde_json::Value, key: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
-fn parse_drop(value: &serde_json::Value) -> Option<Drop> {
+fn parse_drop(value: &serde_json::Value, my_secret: Option<&x25519_dalek::StaticSecret>) -> Option<Drop> {
+    let raw_note = string(value, "note");
+    let note_ciphertext = string(value, "noteCiphertext");
+    let is_encrypted = value["isEncrypted"].as_bool().unwrap_or(false);
+
+    let decrypted_note = if is_encrypted {
+        if let (Some(secret), Some(cipher_b64)) = (my_secret, &note_ciphertext) {
+            match open_note(secret, cipher_b64) {
+                Ok(plain) => Some(plain),
+                Err(_) => Some("[Encrypted Note - Key Mismatch]".to_string()),
+            }
+        } else {
+            Some("[Encrypted Note]".to_string())
+        }
+    } else {
+        raw_note
+    };
+
     Some(Drop {
         id: string(value, "id")?,
         from_user: string(value, "fromUser").unwrap_or_default(),
         to_user: string(value, "toUser").unwrap_or_default(),
         track_title: string(value, "trackTitle").unwrap_or_default(),
         artist_name: string(value, "artistName").unwrap_or_default(),
-        note: string(value, "note"),
+        note: decrypted_note,
+        note_ciphertext,
+        is_encrypted,
         created_at: string(value, "createdAt").unwrap_or_default(),
         read_at: string(value, "readAt"),
     })
@@ -100,7 +195,7 @@ impl AgroClient {
     pub async fn friends(&self) -> Result<Vec<Friend>> {
         let answer = self
             .graphql(&json!({
-                "query": "{ friends { profile { username displayName } nowPlaying { trackTitle artistName } } }"
+                "query": "{ friends { profile { username displayName publicKey } nowPlaying { trackTitle artistName } } }"
             }))
             .await?;
         Ok(answer["data"]["friends"]
@@ -118,6 +213,7 @@ impl AgroClient {
                                     None => title,
                                 }
                             }),
+                            public_key: string(profile, "publicKey"),
                         })
                     })
                     .collect()
@@ -197,7 +293,7 @@ impl AgroClient {
     }
 
     /// Drops sent to this account and not yet archived.
-    pub async fn inbox(&self) -> Result<Vec<Drop>> {
+    pub async fn inbox(&self, my_secret: Option<&x25519_dalek::StaticSecret>) -> Result<Vec<Drop>> {
         let answer = self
             .graphql(&json!({
                 "query": format!("{{ inbox {{ {DROP_FIELDS} }} }}")
@@ -205,15 +301,11 @@ impl AgroClient {
             .await?;
         Ok(answer["data"]["inbox"]
             .as_array()
-            .map(|rows| rows.iter().filter_map(parse_drop).collect())
+            .map(|rows| rows.iter().filter_map(|r| parse_drop(r, my_secret)).collect())
             .unwrap_or_default())
     }
 
-    /// Hands a track to a friend.
-    ///
-    /// `track_uri` is this device's namespaced identifier when it has one. It is inert on a client
-    /// that does not share the same backend, which is why the title and artist are what actually
-    /// carry the message.
+    /// Hands a track to a friend, encrypting any note with the recipient's public key.
     pub async fn drop_track(
         &self,
         to: &str,
@@ -222,14 +314,29 @@ impl AgroClient {
         album: Option<&str>,
         track_uri: Option<&str>,
         note: Option<&str>,
+        recipient_pubkey: Option<&str>,
     ) -> Result<()> {
+        let (sealed_ciphertext, is_encrypted) = match note.filter(|text| !text.trim().is_empty()) {
+            Some(text) => {
+                if let Some(pubkey) = recipient_pubkey.filter(|k| !k.trim().is_empty()) {
+                    let cipher = seal_note(pubkey, text)?;
+                    (Some(cipher), true)
+                } else {
+                    anyhow::bail!(
+                        "Recipient @{to} has not published their E2EE encryption key yet. Plaintext notes are disabled."
+                    );
+                }
+            }
+            None => (None, false),
+        };
+
         let answer = self
             .graphql(&json!({
                 "query": format!(
                     "mutation D($to: String!, $t: String!, $a: String!, $al: String, \
-                     $u: String, $n: String) {{ \
+                     $u: String, $nc: String, $enc: Boolean) {{ \
                      dropTrack(to: $to, trackTitle: $t, artistName: $a, albumName: $al, \
-                     trackUri: $u, note: $n) {{ {DROP_FIELDS} }} }}"
+                     trackUri: $u, noteCiphertext: $nc, isEncrypted: $enc) {{ {DROP_FIELDS} }} }}"
                 ),
                 "variables": {
                     "to": to.trim().to_lowercase(),
@@ -237,7 +344,8 @@ impl AgroClient {
                     "a": artist,
                     "al": album,
                     "u": track_uri,
-                    "n": note.filter(|text| !text.trim().is_empty()),
+                    "nc": sealed_ciphertext,
+                    "enc": is_encrypted,
                 }
             }))
             .await?;
@@ -267,5 +375,44 @@ impl AgroClient {
             }))
             .await?;
         Ok(answer["data"]["archiveDrop"].as_bool().unwrap_or(false))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seal_and_open_note_roundtrip() {
+        let recipient_secret = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+        let recipient_public = x25519_dalek::PublicKey::from(&recipient_secret);
+        let recipient_pub_b64 = BASE64_STANDARD.encode(recipient_public.as_bytes());
+
+        let secret_message = "Check out this confidential unreleased track!";
+        let ciphertext = seal_note(&recipient_pub_b64, secret_message).unwrap();
+
+        assert_ne!(ciphertext, secret_message);
+        let decrypted = open_note(&recipient_secret, &ciphertext).unwrap();
+        assert_eq!(decrypted, secret_message);
+    }
+
+    #[test]
+    fn legacy_unencrypted_drop_parses_plain_note() {
+        let drop_json = json!({
+            "id": "drop-123",
+            "fromUser": "alice",
+            "toUser": "bob",
+            "trackTitle": "Old Song",
+            "artistName": "Old Artist",
+            "note": "Listen to this!",
+            "noteCiphertext": null,
+            "isEncrypted": false,
+            "createdAt": "2025-01-01T00:00:00Z",
+            "readAt": null
+        });
+
+        let parsed = parse_drop(&drop_json, None).unwrap();
+        assert_eq!(parsed.note.as_deref(), Some("Listen to this!"));
+        assert!(!parsed.is_encrypted);
     }
 }

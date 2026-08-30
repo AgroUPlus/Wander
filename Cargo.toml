@@ -34,6 +34,9 @@ walkdir = "2.5.0"
 # Library sync: SHA-256 identifies a file across machines, and tokio-util bridges a file into a
 # streaming request body so an upload never holds the whole file in memory.
 sha2 = "0.10"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+base64 = "0.22"
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 trash = "5.2.6"
