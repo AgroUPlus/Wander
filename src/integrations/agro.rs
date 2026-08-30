@@ -240,6 +240,13 @@ pub(crate) fn cached_token() -> Option<String> {
     Some(stored)
 }
 
+/// Clears the in-memory cached device token so changes take effect immediately.
+pub fn forget_cached_token() {
+    if let Ok(mut guard) = DEVICE_TOKEN.write() {
+        *guard = None;
+    }
+}
+
 /// Remembers a freshly minted token, in this process and on disk.
 ///
 /// The config is re-read before it is written so this cannot clobber an edit made while the

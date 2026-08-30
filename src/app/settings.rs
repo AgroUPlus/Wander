@@ -609,8 +609,10 @@ impl App {
             }
             SettingItem::AgroPassphrase => {
                 self.config.agro.passphrase = value.trim().to_string();
+                self.config.agro.absorb_pairing_uri();
                 let _ = self.config.save();
-                self.status_message = Some("Agro passphrase saved".into());
+                crate::integrations::agro::forget_cached_token();
+                self.status_message = Some("Agro credential saved".into());
             }
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => {

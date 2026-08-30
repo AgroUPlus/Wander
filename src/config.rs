@@ -182,29 +182,32 @@ impl AgroConfig {
     /// make. It fails silently and identically to a wrong credential: the URI goes out as a bearer
     /// token, the server refuses it, and nothing says why. Reading the token out of it is cheaper
     /// than explaining the difference, and the URI carries the username and server too, so a
-    /// single paste is enough to pair.
-    fn absorb_pairing_uri(&mut self) {
+    /// Accepts a whole pairing URI or bare token where a credential is expected.
+    pub fn absorb_pairing_uri(&mut self) {
         let raw = self.passphrase.trim().to_string();
-        if !raw.starts_with("agro://") {
-            return;
-        }
-        let Some(query) = raw.split_once('?').map(|(_, q)| q) else {
-            return;
-        };
-        for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
-            let decoded = percent_decode(value);
-            if decoded.is_empty() {
-                continue;
-            }
-            match key {
-                "token" => {
-                    self.device_token = decoded;
-                    self.passphrase = String::new();
+        if raw.starts_with("agro://") {
+            let Some(query) = raw.split_once('?').map(|(_, q)| q) else {
+                return;
+            };
+            for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+                let decoded = percent_decode(value);
+                if decoded.is_empty() {
+                    continue;
                 }
-                "username" => self.username = decoded,
-                "server" => self.server = decoded.trim_end_matches('/').to_string(),
-                _ => {}
+                match key {
+                    "token" => {
+                        self.device_token = decoded;
+                        self.passphrase = String::new();
+                    }
+                    "username" => self.username = decoded,
+                    "server" => self.server = decoded.trim_end_matches('/').to_string(),
+                    _ => {}
+                }
             }
+        } else if !raw.is_empty() && !raw.contains(' ') && raw.len() >= 32 {
+            // A bare device token was pasted into the credential field.
+            self.device_token = raw;
+            self.passphrase = String::new();
         }
     }
 }
