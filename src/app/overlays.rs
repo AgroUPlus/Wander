@@ -205,7 +205,7 @@ impl App {
                 .await
             {
                 Ok(share) => Ok(share_domain
-                    .rewrite_async(&share.url, agro_client.as_ref())
+                    .rewrite_async(&share.url, agro_client.as_ref(), expires)
                     .await),
                 Err(err) => Err(format!("{err:#}")),
             };

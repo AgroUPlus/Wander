@@ -543,20 +543,22 @@ impl AgroClient {
         Ok(())
     }
 
-    pub async fn create_short_link(&self, target_url: &str) -> Result<String> {
+    pub async fn create_short_link(&self, target_url: &str, expires_ms: Option<i64>) -> Result<String> {
         let mutation = r#"
-            mutation CreateShortLink($userId: String, $targetUrl: String!, $source: String) {
-                createShortLink(userId: $userId, targetUrl: $targetUrl, source: $source)
+            mutation CreateShortLink($userId: String, $targetUrl: String!, $source: String, $expiresAt: Int) {
+                createShortLink(userId: $userId, targetUrl: $targetUrl, source: $source, expiresAt: $expiresAt)
             }
         "#;
         // Attributed to the account, which is what makes the link appear in Agro's link manager —
         // an unowned link could be minted but never listed, counted or revoked.
+        let expires_at_sec = expires_ms.map(|ms| ms / 1000);
         let body = json!({
             "query": mutation,
             "variables": {
                 "userId": self.username,
                 "targetUrl": target_url,
-                "source": "navidrome"
+                "source": "navidrome",
+                "expiresAt": expires_at_sec
             }
         });
         let json_data = self.graphql(&body).await?;
