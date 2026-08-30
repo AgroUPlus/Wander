@@ -61,6 +61,7 @@ pub enum SettingItem {
     AgroUsername,
     AgroPassphrase,
     AgroDeviceName,
+    AgroProxyEnabled,
     SyncP2p,
     SyncServerArchive,
     SyncLibrary,
@@ -152,6 +153,7 @@ impl SettingItem {
             | Self::QueueColumn(_)
             | Self::AddQueueColumn
             | Self::ShowKeybindings => Section::Plugins,
+            Self::AgroProxyEnabled => Section::Agro,
 
             #[cfg(feature = "nyaa")]
             Self::PluginNyaaEnabled
@@ -254,6 +256,7 @@ impl SettingItem {
             Self::QueueColumn(index) => format!("Queue column {}", index + 1),
             Self::AddQueueColumn => "Add queue column".into(),
             Self::ShowKeybindings => "View keybindings".into(),
+            Self::AgroProxyEnabled => "Route external API requests through Agro to mask your IP".into(),
         }
     }
 }
@@ -281,6 +284,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::AgroUsername,
         SettingItem::AgroPassphrase,
         SettingItem::AgroDeviceName,
+        SettingItem::AgroProxyEnabled,
         SettingItem::SyncP2p,
         SettingItem::SyncServerArchive,
         SettingItem::SyncLibrary,
@@ -521,6 +525,7 @@ fn value_of(app: &App, item: SettingItem) -> String {
             });
             format!("{} (wander)", petname)
         }
+        SettingItem::AgroProxyEnabled => on_off(config.agro.proxy_enabled),
         SettingItem::AgroServer => {
             if config.agro.server.is_empty() {
                 "https://agro.kolbxyz.xyz (default)".into()

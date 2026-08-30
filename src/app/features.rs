@@ -32,8 +32,11 @@ impl App {
         let song_id = song.id.clone();
         let library = Arc::clone(&self.library);
         let cache = Arc::clone(&self.lyrics_cache);
+        let agro_config = self.config.agro.clone();
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let lyrics_config = self.config.lyrics.clone();
+        let agro_config = self.config.agro.clone();
 
         self.spawn_load(async move {
             if let Some(cached) = cache.get(&song_id)
@@ -51,6 +54,7 @@ impl App {
                 && let Some(online) = crate::subsonic::online_lyrics::fetch_online_lyrics(
                     &http,
                     &lyrics_config,
+                    Some(&agro_config),
                     &song,
                 )
                 .await
@@ -115,13 +119,16 @@ impl App {
         };
         let source = self.lyrics.active().clone();
         let mut set = self.lyrics.clone();
+        let agro_config = self.config.agro.clone();
         let config = self.config.lyrics.clone();
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let cache = Arc::clone(&self.lyrics_cache);
+        let agro_config = self.config.agro.clone();
 
         self.status_message = Some("Translating…".to_string());
         self.spawn_load(async move {
-            match crate::subsonic::translate::translate(&http, &config, &source).await {
+            match crate::subsonic::translate::translate(&http, &config, Some(&agro_config), &source).await {
                 Ok(translated) => {
                     set.push_active(translated);
                     // Cached with the rest of the track's variants, so this
@@ -146,15 +153,17 @@ impl App {
 
         let song_id = song.id.clone();
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let config = self.config.lyrics.clone();
         let mut set = self.lyrics.clone();
+        let agro_config = self.config.agro.clone();
 
         self.status_message = Some("Searching online lyrics (LRCLIB)…".to_string());
         self.lyrics_pending = true;
 
         self.spawn_load(async move {
             if let Some(online) =
-                crate::subsonic::online_lyrics::fetch_online_lyrics(&http, &config, &song).await
+                crate::subsonic::online_lyrics::fetch_online_lyrics(&http, &config, Some(&agro_config), &song).await
             {
                 if set.is_empty() {
                     set = online;
@@ -421,13 +430,14 @@ impl App {
         self.status_message = Some(format!("Searching archive.org for '{}'...", query));
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let collection = crate::plugins::archive::ArchiveCollection::from_code(
             &self.config.plugins.archive.collection,
         );
         let loads = self.loads.clone();
 
         tokio::spawn(async move {
-            let res = crate::plugins::archive::api::search_archive(&http, &query, collection)
+            let res = crate::plugins::archive::api::search_archive(&http, Some(&agro_config), &query, collection)
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = loads.send(LoadEvent::ArchiveResults(res));
@@ -460,9 +470,10 @@ impl App {
 
         self.archive_plugin.pending.insert(identifier.clone());
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let loads = self.loads.clone();
         tokio::spawn(async move {
-            let files = crate::plugins::archive::api::item_files(&http, &identifier)
+            let files = crate::plugins::archive::api::item_files(&http, Some(&agro_config), &identifier)
                 .await
                 .ok();
             let _ = loads.send(LoadEvent::ArchiveItemFiles { identifier, files });
@@ -502,8 +513,10 @@ impl App {
         ));
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let loads = self.loads.clone();
         let cached = self.cached_archive_files(&item.identifier);
+        let agro_config = self.config.agro.clone();
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
@@ -512,6 +525,7 @@ impl App {
                 None => {
                     match crate::plugins::archive::api::item_files_and_cover(
                         &http,
+                        Some(&agro_config),
                         &item.identifier,
                     )
                     .await
@@ -597,8 +611,10 @@ impl App {
         });
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let loads = self.loads.clone();
         let cached = self.cached_archive_files(&item.identifier);
+        let agro_config = self.config.agro.clone();
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.start_plugin_job(cancel, async move {
@@ -606,7 +622,7 @@ impl App {
                 let files = match cached {
                     Some(files) => files,
                     None => {
-                        crate::plugins::archive::api::item_files(&http, &item.identifier).await?
+                        crate::plugins::archive::api::item_files(&http, Some(&agro_config), &item.identifier).await?
                     }
                 };
                 crate::plugins::archive::downloader::download_archive_item(
@@ -658,11 +674,12 @@ impl App {
         self.status_message = Some(format!("Searching nyaa.si for '{}'...", query));
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let category = self.config.plugins.nyaa.category.clone();
         let loads = self.loads.clone();
 
         tokio::spawn(async move {
-            let res = crate::plugins::nyaa::api::search_nyaa(&http, &query, &category)
+            let res = crate::plugins::nyaa::api::search_nyaa(&http, Some(&agro_config), &query, &category)
                 .await
                 .map_err(|e| format!("{e:#}"));
             let _ = loads.send(LoadEvent::NyaaResults(res));
@@ -729,6 +746,7 @@ impl App {
         });
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let loads = self.loads.clone();
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -759,6 +777,7 @@ impl App {
         ));
 
         let http = self.http.clone();
+        let agro_config = self.config.agro.clone();
         let loads = self.loads.clone();
 
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

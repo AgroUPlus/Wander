@@ -1,5 +1,6 @@
 mod app;
 mod config;
+pub mod http;
 mod history;
 mod integrations;
 mod keymap;

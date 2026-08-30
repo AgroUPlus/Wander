@@ -93,6 +93,7 @@ fn build_url(endpoint: &str, params: &[(&str, &str)]) -> String {
 pub async fn fetch_online_lyrics(
     http: &reqwest::Client,
     config: &LyricsConfig,
+    agro_config: Option<&crate::config::AgroConfig>,
     song: &Song,
 ) -> Option<LyricSet> {
     if !config.fetch_online {

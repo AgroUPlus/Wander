@@ -43,6 +43,7 @@ enum Translated {
 pub async fn translate(
     http: &reqwest::Client,
     config: &LyricsConfig,
+    agro_config: Option<&crate::config::AgroConfig>,
     lyrics: &Lyrics,
 ) -> Result<Lyrics> {
     if !config.translation_enabled() {
@@ -80,8 +81,7 @@ pub async fn translate(
         api_key: (!api_key.is_empty()).then_some(api_key),
     };
 
-    let response = http
-        .post(config.translate_url.trim())
+    let response = crate::http::external_request(http, agro_config, reqwest::Method::POST, config.translate_url.trim())
         .json(&request)
         .send()
         .await

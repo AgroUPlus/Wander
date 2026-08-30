@@ -355,7 +355,8 @@ impl App {
             | SettingItem::AgroPassphrase
             | SettingItem::PluginArchiveDownloadDir
             | SettingItem::AddQueueColumn
-            | SettingItem::ShowKeybindings => {}
+            | SettingItem::ShowKeybindings
+            | SettingItem::AgroProxyEnabled => {}
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => {}
         }

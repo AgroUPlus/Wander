@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub(crate) fn default_true() -> bool { true }
+
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +41,8 @@ pub struct Config {
 #[serde(default)]
 pub struct AgroConfig {
     pub enabled: bool,
+    #[serde(default = "crate::config::default_true")]
+    pub proxy_enabled: bool,
     #[serde(alias = "url")]
     pub server: String,
     pub username: String,
@@ -235,6 +239,7 @@ impl Default for AgroConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            proxy_enabled: true,
             server: "https://agro.kolbxyz.xyz".to_string(),
             username: "alpha".to_string(),
             passphrase: String::new(),
