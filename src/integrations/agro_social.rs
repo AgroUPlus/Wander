@@ -305,7 +305,6 @@ impl AgroClient {
             .unwrap_or_default())
     }
 
-    /// Hands a track to a friend, encrypting any note with the recipient's public key.
     pub async fn drop_track(
         &self,
         to: &str,
@@ -316,36 +315,38 @@ impl AgroClient {
         note: Option<&str>,
         recipient_pubkey: Option<&str>,
     ) -> Result<()> {
-        let (sealed_ciphertext, is_encrypted) = match note.filter(|text| !text.trim().is_empty()) {
+        let trimmed_note = note.map(|n| n.trim()).filter(|n| !n.is_empty());
+        let (sealed_ciphertext, plain_note, is_encrypted) = match trimmed_note {
             Some(text) => {
                 if let Some(pubkey) = recipient_pubkey.filter(|k| !k.trim().is_empty()) {
-                    let cipher = seal_note(pubkey, text)?;
-                    (Some(cipher), true)
+                    match seal_note(pubkey, text) {
+                        Ok(cipher) => (Some(cipher), None, true),
+                        Err(_) => (None, Some(text.to_string()), false),
+                    }
                 } else {
-                    anyhow::bail!(
-                        "Recipient @{to} has not published their E2EE encryption key yet. Plaintext notes are disabled."
-                    );
+                    (None, Some(text.to_string()), false)
                 }
             }
-            None => (None, false),
+            None => (None, None, false),
         };
 
         let answer = self
             .graphql(&json!({
                 "query": format!(
                     "mutation D($to: String!, $t: String!, $a: String!, $al: String, \
-                     $u: String, $nc: String, $enc: Boolean) {{ \
+                     $u: String, $n: String, $nc: String, $enc: Boolean) {{ \
                      dropTrack(to: $to, trackTitle: $t, artistName: $a, albumName: $al, \
-                     trackUri: $u, noteCiphertext: $nc, isEncrypted: $enc) {{ {DROP_FIELDS} }} }}"
+                     trackUri: $u, note: $n, noteCiphertext: $nc, isEncrypted: $enc) {{ {DROP_FIELDS} }} }}"
                 ),
                 "variables": {
-                    "to": to.trim().to_lowercase(),
+                    "to": to.trim(),
                     "t": title,
                     "a": artist,
                     "al": album,
                     "u": track_uri,
+                    "n": plain_note,
                     "nc": sealed_ciphertext,
-                    "enc": is_encrypted,
+                    "enc": is_encrypted
                 }
             }))
             .await?;
