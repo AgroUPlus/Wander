@@ -319,12 +319,12 @@ impl AgroClient {
         let (sealed_ciphertext, plain_note, is_encrypted) = match trimmed_note {
             Some(text) => {
                 if let Some(pubkey) = recipient_pubkey.filter(|k| !k.trim().is_empty()) {
-                    match seal_note(pubkey, text) {
-                        Ok(cipher) => (Some(cipher), None, true),
-                        Err(_) => (None, Some(text.to_string()), false),
-                    }
+                    let cipher = seal_note(pubkey, text)?;
+                    (Some(cipher), None, true)
                 } else {
-                    (None, Some(text.to_string()), false)
+                    anyhow::bail!(
+                        "Recipient @{to} has not published their E2EE encryption key yet. Plaintext notes are disabled."
+                    );
                 }
             }
             None => (None, None, false),
