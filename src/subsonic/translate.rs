@@ -162,7 +162,7 @@ mod tests {
     async fn an_unconfigured_endpoint_is_refused_before_any_request() {
         let mut config = config();
         config.translate_url = "  ".into();
-        let error = translate(&reqwest::Client::new(), &config, &lyrics())
+        let error = translate(&reqwest::Client::new(), &config, None, &lyrics())
             .await
             .expect_err("should refuse");
         assert!(error.to_string().contains("no translation endpoint"));
@@ -171,7 +171,7 @@ mod tests {
     #[tokio::test]
     async fn empty_lyrics_are_not_sent_anywhere() {
         assert!(
-            translate(&reqwest::Client::new(), &config(), &Lyrics::default())
+            translate(&reqwest::Client::new(), &config(), None, &Lyrics::default())
                 .await
                 .is_err()
         );
@@ -183,7 +183,7 @@ mod tests {
         for line in &mut all_gaps.lines {
             line.text = "  ".into();
         }
-        let error = translate(&reqwest::Client::new(), &config(), &all_gaps)
+        let error = translate(&reqwest::Client::new(), &config(), None, &all_gaps)
             .await
             .expect_err("should refuse");
         assert!(error.to_string().contains("nothing to translate"));

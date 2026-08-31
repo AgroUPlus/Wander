@@ -256,7 +256,7 @@ impl SettingItem {
             Self::QueueColumn(index) => format!("Queue column {}", index + 1),
             Self::AddQueueColumn => "Add queue column".into(),
             Self::ShowKeybindings => "View keybindings".into(),
-            Self::AgroProxyEnabled => "Route external API requests through Agro to mask your IP".into(),
+            Self::AgroProxyEnabled => "Agro privacy relay".into(),
         }
     }
 }
