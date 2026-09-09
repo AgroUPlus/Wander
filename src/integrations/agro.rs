@@ -451,16 +451,17 @@ impl AgroClient {
     /// Publishes this account's X25519 identity public key for E2EE track drops.
     pub async fn set_public_key(&self, public_key: &str) -> Result<bool> {
         let mutation = r#"
-            mutation SetPublicKey($publicKey: String) {
-                setPublicKey(publicKey: $publicKey) {
+            mutation SetPublicKey($publicKey: String, $deviceId: String) {
+                setPublicKey(publicKey: $publicKey, deviceId: $deviceId) {
                     publicKey
                 }
             }
         "#;
-        let body = json!({
+        let body = serde_json::json!({
             "query": mutation,
             "variables": {
-                "publicKey": public_key.trim(),
+                "publicKey": public_key,
+                "deviceId": self.device_id
             }
         });
         let answer = self.graphql(&body).await?;
@@ -675,46 +676,38 @@ impl AgroClient {
     /// The server is idempotent on the `playUid` each entry carries, so re-sending a batch this
     /// client was unsure about is safe — which is what lets the outbox retry rather than having to
     /// know whether a timed-out request actually landed. See [`PendingScrobble::play_uid`].
-    async fn record_scrobbles(&self, device_name: &str, plays: &[PendingScrobble]) -> Result<()> {
+    async fn record_scrobbles(&self, _device_name: &str, plays: &[PendingScrobble]) -> Result<()> {
         let mutation = r#"
-            mutation RecordScrobbles(
-                $userId: String!, $deviceName: String!, $clientType: String,
-                $entries: [ScrobbleInput!]!
-            ) {
-                recordScrobbles(
-                    userId: $userId, deviceName: $deviceName, clientType: $clientType,
-                    entries: $entries
-                )
+            mutation SubmitPlayCounts($entries: [PlayCountInput!]!) {
+                submitPlayCounts(entries: $entries)
             }
         "#;
 
-        let entries: Vec<serde_json::Value> = plays
-            .iter()
-            .map(|play| {
-                json!({
-                    "trackTitle": play.title,
-                    "artistName": play.artist,
-                    "albumName": play.album,
-                    // One genre, because that is what the server stores. The first is the primary
-                    // one on every backend that reports more than one.
-                    "genre": play.genres.first(),
-                    "durationSecs": play.secs as i64,
-                    "playedAt": rfc3339(play.at),
-                    "playUid": play.play_uid(),
+        // Group plays by title+artist+album to count them
+        use std::collections::HashMap;
+        let mut counts: HashMap<(&str, &str, Option<&str>), i64> = HashMap::new();
+        for play in plays {
+            *counts.entry((&play.title, &play.artist, play.album.as_deref())).or_insert(0) += 1;
+        }
+
+        let entries: Vec<serde_json::Value> = counts
+            .into_iter()
+            .map(|((title, artist, album), count)| {
+                serde_json::json!({
+                    "title": title,
+                    "artist": artist,
+                    "album": album,
+                    "count": count
                 })
             })
             .collect();
 
-        let body = json!({
+        let body = serde_json::json!({
             "query": mutation,
             "variables": {
-                "userId": self.username,
-                "deviceName": device_name,
-                "clientType": "wander",
-                "entries": entries,
+                "entries": entries
             }
         });
-
         self.graphql(&body).await?;
         Ok(())
     }
@@ -830,6 +823,101 @@ impl AgroClient {
             .collect();
 
         Ok(Some(ShareDomain { domain, hosts }))
+    }
+
+    pub async fn publish_recording(
+        &self,
+        embedding: &str,
+        dim: i64,
+        model: &str,
+        version: i64,
+        duration_ms: i64,
+        title: Option<&str>,
+        artist: Option<&str>,
+        album: Option<&str>,
+        track_uri: Option<&str>,
+    ) -> Result<String> {
+        let mutation = r#"
+            mutation PublishRecording($embedding: String!, $dim: Int!, $model: String!, $version: Int!, $durationMs: Int!, $title: String, $artist: String, $album: String, $trackUri: String) {
+                publishRecording(embedding: $embedding, dim: $dim, model: $model, version: $version, durationMs: $durationMs, title: $title, artist: $artist, album: $album, trackUri: $trackUri) {
+                    recordingId
+                }
+            }
+        "#;
+        let body = serde_json::json!({
+            "query": mutation,
+            "variables": {
+                "embedding": embedding,
+                "dim": dim,
+                "model": model,
+                "version": version,
+                "durationMs": duration_ms,
+                "title": title,
+                "artist": artist,
+                "album": album,
+                "trackUri": track_uri
+            }
+        });
+        let answer = self.graphql(&body).await?;
+        if let Some(id) = answer["data"]["publishRecording"]["recordingId"].as_str() {
+            Ok(id.to_string())
+        } else {
+            anyhow::bail!("publishRecording failed")
+        }
+    }
+
+    pub async fn similar_recordings(&self, artist: &str, title: &str, limit: i64) -> Result<Vec<(String, String)>> {
+        let query = r#"
+            query SimilarRecordings($artist: String!, $title: String!, $limit: Int) {
+                similarRecordings(artist: $artist, title: $title, limit: $limit) {
+                    title
+                    artist
+                }
+            }
+        "#;
+        let body = serde_json::json!({
+            "query": query,
+            "variables": {
+                "artist": artist,
+                "title": title,
+                "limit": limit
+            }
+        });
+        let answer = self.graphql(&body).await?;
+        if let Some(arr) = answer["data"]["similarRecordings"].as_array() {
+            let mut res = Vec::new();
+            for item in arr {
+                if let (Some(t), Some(a)) = (item["title"].as_str(), item["artist"].as_str()) {
+                    res.push((t.to_string(), a.to_string()));
+                }
+            }
+            Ok(res)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    pub async fn submit_play_counts(&self, title: &str, artist: &str, album: Option<&str>, count: i64) -> Result<()> {
+        let mutation = r#"
+            mutation SubmitPlayCounts($entries: [PlayCountInput!]!) {
+                submitPlayCounts(entries: $entries)
+            }
+        "#;
+        let body = serde_json::json!({
+            "query": mutation,
+            "variables": {
+                "entries": [
+                    {
+                        "title": title,
+                        "artist": artist,
+                        "album": album,
+                        "count": count
+                    }
+                ]
+            }
+        });
+        self.graphql(&body).await?;
+        Ok(())
     }
 }
 
@@ -1396,3 +1484,8 @@ mod token_reuse_tests {
         );
     }
 }
+
+    pub async fn similar_recordings(&self, artist: &str, title: &str, limit: i64) -> Result<Vec<(String, String)>> {
+        let query = r#"
+            query SimilarRecordings($artist: String!, $title: String!, $limit: Int) {
+                similarRecordings(artist: $artist, title: $title, limit: $limit) {

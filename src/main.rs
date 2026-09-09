@@ -11,6 +11,7 @@ mod plugins;
 mod subsonic;
 mod theme;
 mod ui;
+pub mod audio_embedder;
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::{Event, EventStream, KeyEventKind};

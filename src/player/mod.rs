@@ -585,6 +585,21 @@ impl PlayerTask {
         let mut candidates: Vec<Song> = std::mem::take(&mut self.radio_pool);
         self.radio_pool_seed = Some(pool_seed);
 
+        // 0. Agro crowd-averaged acoustic vectors
+        if let Some(agro_client) = crate::integrations::agro::ACTIVE_CLIENT.get() {
+            if let Ok(neighbours) = agro_client.similar_recordings(seed.artist.as_deref().unwrap_or(""), &seed.title, 20).await {
+                for (t, a) in neighbours {
+                    if let Ok(res) = self.library.search(&format!("{} {}", t, a), 5).await {
+                        if let Some(songs) = res.song {
+                            if let Some(s) = songs.into_iter().find(|s| s.title.eq_ignore_ascii_case(&t)) {
+                                candidates.push(s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Server-side similarity. Best signal when it exists, but Navidrome
         //    returns nothing without Last.fm, so it can never be the only pool.
         candidates.extend(
