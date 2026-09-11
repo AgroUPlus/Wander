@@ -1,58 +1,69 @@
-# Wander 🎵
+<p align="center">
+  <img src="docs/assets/WanderLogo.png" width="96" height="96" alt="Wander logo" />
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Language: Rust](https://img.shields.io/badge/Rust-2024_Edition-orange.svg)](https://www.rust-lang.org/)
-[![API: Subsonic](https://img.shields.io/badge/API-Subsonic%20%2F%20Navidrome-green.svg)](https://www.navidrome.org/)
-[![TUI: Ratatui](https://img.shields.io/badge/TUI-Ratatui-purple.svg)](https://ratatui.rs/)
+<h1 align="center">Wander</h1>
+
+<p align="center">
+  Terminal music player (TUI) streaming from Navidrome / Subsonic and local libraries
+</p>
+
+<p align="center">
+  <a href="https://github.com/Kolbxyz/wander">GitHub</a> ·
+  <a href="LICENSE">License</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#configuration">Configuration</a> ·
+  <a href="#keybindings">Keybindings</a>
+</p>
+
+---
 
 **Wander** is a fast, keyboard- and mouse-driven terminal music player (TUI) built in Rust. It streams from [Navidrome](https://www.navidrome.org/) and [Subsonic](http://www.subsonic.org/pages/api.jsp)-compatible music servers, plays local audio files directly from your hard drive, or combines both — offering **one unified library and queue**.
+
+- **Unified Local & Remote Library** — Mix local MP3/FLAC/Opus files with streamed Navidrome tracks seamlessly in the same queue without playback gaps.
+- **Native Audio Engine** — Low-latency output via `cpal` and `symphonia` with zero-copy ring buffers and native `libopus` decoding.
+- **Terminal High-Res Visuals** — Native cover art rendering (Kitty, Sixel, iTerm2, half-blocks) and calibrated reactive visualisers (aurora, embers, bloom, oscilloscope, waterfall).
+- **Synced Lyrics & Radio** — Real-time auto-scrolling lyrics, dynamic similarity queueing, MPRIS v2 controls, and Discord Rich Presence.
 
 > *Named for what it is for: wandering through your music collection rather than just searching it.*
 
 ---
 
-<img width="1279" height="719" alt="image" src="https://github.com/user-attachments/assets/fa2726d5-1eea-41a5-bc82-6cf3fecf3165" />
-<img width="1279" height="719" alt="image" src="https://github.com/user-attachments/assets/592c14b0-25c6-494d-ad24-a87513a83b44" />
+## Screenshots
 
-
-## ⚡ Highlights
-
-- **Unified Local & Remote Library**: Mix local MP3/FLAC/Opus files with streamed Navidrome tracks seamlessly in the same queue without playback gaps.
-- **Native Audio Engine**: High-performance audio output via `cpal` and `symphonia` with zero-copy ring buffers. Native `libopus` decoding ensures Opus tracks stream bit-perfect without server transcoding.
-- **Terminal High-Res Visuals**: High-resolution cover art (Kitty, Sixel, iTerm2, and half-block fallbacks) alongside an in-terminal visualiser that is deliberately not a bar chart: a drifting **aurora** ribbon, a bed of **embers** stoked by the music, a **bloom** that throws rings out on every onset, an **oscilloscope** trace, and a spectrogram **waterfall** — all levelled against the track's own loudness, so quiet and loud masters read the same.
-- **Synced & Unsynced Lyrics**: Real-time timed lyrics with smooth auto-scrolling, or manual navigation for unsynced track lyrics.
-- **Endless Radio Mode**: Automatically queues contextually relevant tracks using Navidrome similarity API, genre matching, and local listening history.
-- **System & Desktop Integration**: Native MPRIS v2 interface (`playerctl`, desktop shell bars) and Discord Rich Presence with MusicBrainz cover artwork resolution.
-- **Full Customizability**: Flexible key rebinding system and complete color palette customization.
+<p align="center">
+  <img width="48%" alt="Wander Library and Player View" src="https://github.com/user-attachments/assets/fa2726d5-1eea-41a5-bc82-6cf3fecf3165" />
+  <img width="48%" alt="Wander Fullscreen Focus and Visualiser View" src="https://github.com/user-attachments/assets/592c14b0-25c6-494d-ad24-a87513a83b44" />
+</p>
 
 ---
 
-## 📸 Interface Overview
+## Interface Overview
 
-Wander features four main interactive tabs, a dynamic Operations manager, and a full-screen focus view:
+Wander organizes playback, management, and discovery across dedicated views:
 
 | View | Description |
-| :--- | :--- |
+|---|---|
 | **`1` Home** | Listening statistics, top played artists/tracks, and one-press smart mixes. |
 | **`2` Library** | Fast fuzzy search across artists, albums, tracks, and genres (local & remote). |
 | **`3` Queue** | Interactive queue manager with drag-and-drop mouse support, shuffle, and repeat modes. |
-| **`⚡` Operations** | Dynamic tab showing background downloads, library rescans, ETA gauges, and log history. |
+| **`⚡` Operations** | Dynamic tab tracking background downloads, library rescans, ETA gauges, and logs. |
 | **`4` Settings** | In-app visual editor for server connections, music paths, theme colors, and UI layout. |
-| **`F` Focus Mode** | Full-screen presentation mode featuring large cover art, lyrics, and real-time spectrum visualiser. |
+| **`F` Focus Mode** | Full-screen presentation mode with large cover art, lyrics, and real-time spectrum visualiser. |
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
-Run the provided installation script to build and install Wander to `~/.local/bin`, along with its desktop entry and icon:
+Install Wander to `~/.local/bin` along with its desktop entry and icons:
 
 ```bash
 ./install.sh
 ```
 
-Alternatively, build manually using Cargo:
+Or build manually from source using Cargo:
 
 ```bash
 cargo build --release
@@ -61,31 +72,30 @@ cp target/release/wander ~/.local/bin/
 
 ### First Run & Setup
 
-Simply launch `wander` (or `wander --quickstart`) from your shell or application launcher:
+Launch the setup wizard from your terminal:
 
 ```bash
 wander --quickstart
 ```
 
-1. On initial startup, Wander guides you through configuring your **Navidrome server URL**, **username**, and/or **local music directories**.
-2. Passwords are securely stored in your operating system's keyring (e.g. Secret Service, Keychain) and never saved in plain text:
+1. Enter your **Navidrome server URL**, **username**, or **local music directories**.
+2. Store your credentials securely inside your system keyring (Secret Service, Keychain):
    ```bash
    wander --set-password
    ```
 
-> [!NOTE]  
-> Upgrading from `naviplay`? Configuration directories, cached audio data, and keyring credentials are automatically migrated on first launch.
+> **Upgrading from naviplay?** Configuration directories, cached audio data, and keyring credentials are automatically migrated on first launch.
 
 ---
 
-## ⌨️ Keybindings
+## Keybindings
 
-Press `?` or `Ctrl+h` inside Wander at any time to display the live keybinding cheat sheet.
+Press `?` or `Ctrl+h` inside Wander at any time to open the live keybinding cheat sheet.
 
-### Playback & Volume
+### Playback & Controls
 
 | Key | Action |
-| :--- | :--- |
+|---|---|
 | `Space` | Play / Pause |
 | `n` / `p` | Next / Previous track |
 | `f` / `b` | Seek forward / backward (5s) |
@@ -95,73 +105,58 @@ Press `?` or `Ctrl+h` inside Wander at any time to display the live keybinding c
 | `z` / `r` | Toggle Shuffle / Repeat mode |
 | `x` | Toggle **Radio Mode** (auto-queues similar songs) |
 
-### Navigation & Queue
+### Navigation & Views
 
 | Key | Action |
-| :--- | :--- |
+|---|---|
 | `1` – `4` | Switch directly to Tab 1–4 |
 | `[` / `]` or `Tab` / `Shift+Tab` | Switch to Previous / Next tab |
-| `Alt+←` / `Alt+→` | Move the pane dividers (resize side panes) |
-| `h` / `l` or `←` / `→` | Move between panes — on Home these walk the mixes, in Settings they change values |
-| `Ctrl+←` / `Ctrl+→` or `Ctrl+Tab` | Cycle pane focus, including the **Up Next** pane, on every tab |
-| `Backspace` | Return to previously focused tab |
-| `Enter` | Play highlighted track / selection |
+| `Alt+←` / `Alt+→` | Resize split panes |
+| `h` / `l` or `←` / `→` | Change pane focus / adjust settings values |
+| `Ctrl+←` / `Ctrl+→` | Cycle pane focus across all tabs (including Up Next) |
+| `Backspace` | Return to previously active tab |
+| `Enter` | Play selection |
 | `a` | Append selection to queue |
-| `Ctrl+z` | Undo last queue mutation |
-| `/` or `Ctrl+p` | Open Command Palette & Fuzzy Launcher |
+| `Ctrl+z` | Undo last queue change |
+| `/` or `Ctrl+p` | Command palette & fuzzy search |
+| `F` | Toggle **Focus Mode** |
+| `Q` | Toggle Queue side pane |
+| `v` / `V` | Toggle visualiser / cycle style (aurora, ember, bloom, scope, waterfall) |
+| `Y` / `T` | Cycle lyric variant / Translate lyrics |
 
-### UI & Layout
-
-| Key | Action |
-| :--- | :--- |
-| `F` | Toggle **Focus Mode** (Full-screen Cover + Lyrics + Visualiser) |
-| `Q` | Toggle Queue Side Pane |
-| `c` | Toggle Cover Art Display |
-| `v` | Toggle Spectrum Visualiser |
-| `V` | Cycle visualiser style (aurora → ember → bloom → scope → waterfall) |
-| `Y` | Cycle lyric variant (other languages / romanisations / translations) |
-| `T` | Translate the current lyrics (needs `[lyrics] translate_url`) |
-| `?` or `Ctrl+h` | Open Live Help / Keymap Cheat Sheet |
-
-> [!TIP]  
-> **Mouse Controls**: Mouse interaction is fully supported across all tabs! Click tabs and lists, double-click rows to play, drag progress/volume sliders, and scroll lyrics.
+*Full mouse support is enabled across all tabs: click to navigate, double-click to play, drag sliders, and scroll lyrics.*
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-Configuration files are located at `~/.config/wander/config.toml`. All settings can be edited interactively from the **Settings** tab inside the app or modified manually.
+Configuration lives at `~/.config/wander/config.toml` and can be configured through the built-in **Settings** view or edited directly:
 
 ```toml
 [server]
 url = "https://navidrome.example.com"
 username = "your_username"
 # password is stored in the OS keyring (use: wander --set-password)
-# enabled = true
-# format = "raw"  # Force transcoding: "raw", "mp3", or "opus"
+# format = "raw"  # Options: "raw", "mp3", "opus"
 
 [local]
-# Local directories to index (leave empty for server-only mode)
 paths = ["~/Music", "/media/audio"]
 scan_on_start = false
 playlist_dir = "~/Music/Playlists"
 
 [general]
 buffer_seconds = 5.0
-glyphs = "nerd"    # Icon set: "nerd", "unicode", or "ascii"
+glyphs = "nerd"    # Options: "nerd", "unicode", "ascii"
 
 [lyrics]
-# Optional, off by default. Points at a LibreTranslate-compatible /translate
-# endpoint — self-hosted or otherwise. Pressing `T` sends the current track's
-# lyrics to this endpoint, so leave it empty unless that is what you want.
-translate_url = ""            # e.g. "http://localhost:5000/translate"
-translate_api_key = ""        # if your endpoint requires one
+translate_url = ""
+translate_api_key = ""
 translate_to = "en"
 
 [discord]
 enabled = false
-client_id = ""     # Optional custom Discord App ID
-cover_art = true   # Fetch public Cover Art Archive covers for Discord Rich Presence
+client_id = ""
+cover_art = true
 
 [theme]
 background = "#1e1e2e"
@@ -179,87 +174,65 @@ viz_low = "#89b4fa"
 viz_high = "#f5e0dc"
 ```
 
-### Share links on your own domain
+### Share links
 
-Optional. By default a share hands out the link Navidrome minted, which only works for someone who
-can reach that server. Point a domain of yours at a `/listen` forwarder — Agro serves one — and
-shares go out as `https://your-domain/listen?u=…` instead, resolving wherever the recipient is.
+Wander can rewrite share URLs through a custom `/listen` forwarder (such as an Agro instance):
 
 ```toml
 [share]
 domain = "frwd.top"
-hosts = ["music.example.com"]   # your music server; YouTube's hosts are always allowed
+hosts = ["music.example.com"]
 ```
 
-`hosts` is an allowlist, and anything outside it is shared untouched rather than wrapped: a
-forwarder that will send a visitor to any address handed to it is an open redirect wearing your
-domain.
-
-A paired Agro server can publish this for every player at once (its dashboard, under **Share
-Links**), and when it does, its value wins over the file above. Agro is optional in both
-directions — without it this config still works, and without either, links are the server's own.
-
-### Customizing Keybindings
-
-Override default keys by adding a `[keys]` table to `config.toml`:
-
-```toml
-[keys]
-"ctrl+p" = "open_palette"
-"alt+f"  = "toggle_focus_mode"
-"g"      = "none"  # Unbind default key
-"F5"     = "refresh"
-```
+Incoming links resolve to `https://your-domain/listen?u=...` and avoid exposing internal server domains. Unmatched hosts are shared untouched.
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-Wander uses a 3-thread decoupled architecture connected by high-performance channels, ensuring smooth UI rendering and stutter-free audio output:
+Wander decouples user interaction, networking, and audio playback across three dedicated threads:
 
 ```
-┌─────────────────┐       Action       ┌──────────────────┐      Ring Buffer     ┌─────────────────────┐
-│    UI Thread    │ ─────────────────> │  Tokio Async     │ ───────────────────> │  Realtime Audio     │
-│   (Ratatui)     │ <───────────────── │  Runtime         │ <─────────────────── │  Thread (cpal)      │
-└─────────────────┘       State        └──────────────────┘     Sample Clock     └─────────────────────┘
+┌─────────────────┐       Action        ┌──────────────────┐     Ring Buffer     ┌─────────────────────┐
+│    UI Thread    │ ──────────────────> │   Tokio Async    │ ──────────────────> │   Realtime Audio    │
+│    (Ratatui)    │ <────────────────── │     Runtime      │ <────────────────── │    Thread (cpal)    │
+└─────────────────┘        State        └──────────────────┘     Sample Clock    └─────────────────────┘
 ```
 
-- **UI Thread**: Renders the interface at high framerates using `ratatui` without blocking on disk or network I/O.
-- **Tokio Runtime**: Handles background HTTP requests, Subsonic API communications, local directory scanning, and audio decoding.
-- **Audio Output Thread**: Executes a realtime `cpal` callback reading directly from lock-free ring buffers (zero allocations, zero locks).
+- **UI Thread** — Dedicated Ratatui rendering engine decoupled from I/O pauses.
+- **Tokio Runtime** — Handles Subsonic/Navidrome HTTP requests, local disk scanning, and background stream decoding.
+- **Realtime Audio Thread** — Low-latency `cpal` callback reading directly from allocation-free ring buffers.
 
 ---
 
-## 🛠️ Diagnostics & CLI Utilities
-
-Wander includes built-in CLI tools for inspecting audio files and tag parsing:
+## Diagnostics & CLI
 
 ```bash
-# Verify native pipeline decoding for a specific file
+# Verify native pipeline decoding for an audio file
 wander --decode-check /path/to/file.opus
 
-# Test local library scanner output and inspect metadata tags
+# Test local library indexing and check tag parsing
 wander --scan-check ~/Music
 
-# Prompt securely for server password and save to keyring
+# Securely set or update keyring server password
 wander --set-password
 ```
 
 ---
 
-## 🛠️ Development & Testing
+## Development
 
 ```bash
-# Run unit tests
+# Run test suite
 cargo test
 
-# Check code formatting & lints
+# Validate formatting and lints
 cargo fmt --check
 cargo clippy --all-targets
 ```
 
 ---
 
-## 📜 License
+## License
 
 Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for details.
