@@ -4,7 +4,7 @@ use tract_tflite::prelude::*;
 use std::fs;
 
 pub struct AudioEmbedder {
-    model: Option<RunnableModel<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>>,
+    model: Option<std::sync::Arc<RunnableModel<TypedFact, Box<dyn TypedOp>>>>,
 }
 
 impl AudioEmbedder {
@@ -30,7 +30,7 @@ impl AudioEmbedder {
             // and we don't have the exact input spec for nmfp-triplet.
             let tensor = tract_ndarray::Array2::<f32>::zeros((1, 15600)).into_tensor();
             let result = model.run(tvec!(tensor.into()))?;
-            let output = result[0].to_array_view::<f32>()?;
+            let output = result[0].to_plain_array_view::<f32>()?;
             
             // Convert to int8 hex
             let mut hex = String::with_capacity(output.len() * 2);

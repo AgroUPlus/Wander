@@ -687,7 +687,8 @@ impl AgroClient {
         use std::collections::HashMap;
         let mut counts: HashMap<(&str, &str, Option<&str>), i64> = HashMap::new();
         for play in plays {
-            *counts.entry((&play.title, &play.artist, play.album.as_deref())).or_insert(0) += 1;
+            let album = (!play.album.is_empty()).then(|| play.album.as_str());
+            *counts.entry((&play.title, &play.artist, album)).or_insert(0) += 1;
         }
 
         let entries: Vec<serde_json::Value> = counts
@@ -1484,8 +1485,3 @@ mod token_reuse_tests {
         );
     }
 }
-
-    pub async fn similar_recordings(&self, artist: &str, title: &str, limit: i64) -> Result<Vec<(String, String)>> {
-        let query = r#"
-            query SimilarRecordings($artist: String!, $title: String!, $limit: Int) {
-                similarRecordings(artist: $artist, title: $title, limit: $limit) {

@@ -590,10 +590,8 @@ impl PlayerTask {
             if let Ok(neighbours) = agro_client.similar_recordings(seed.artist.as_deref().unwrap_or(""), &seed.title, 20).await {
                 for (t, a) in neighbours {
                     if let Ok(res) = self.library.search(&format!("{} {}", t, a), 5).await {
-                        if let Some(songs) = res.song {
-                            if let Some(s) = songs.into_iter().find(|s| s.title.eq_ignore_ascii_case(&t)) {
-                                candidates.push(s);
-                            }
+                        if let Some(s) = res.song.into_iter().find(|s| s.title.eq_ignore_ascii_case(&t)) {
+                            candidates.push(s);
                         }
                     }
                 }
