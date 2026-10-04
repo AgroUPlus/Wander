@@ -20,6 +20,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::integrations::agro_gate;
 use crate::library::local::index::LocalTrack;
 
 /// Long enough for a large file on a slow link. The handoff client's own timeout is two seconds,
@@ -136,6 +137,21 @@ impl SyncClient {
         }
         drop(read);
         format!("Bearer {}", self.passphrase.trim())
+    }
+
+    /// The `Authorization` header to send, or an error when every credential this client holds has
+    /// already been refused — sending one anyway would only be another counted 401.
+    async fn usable_auth(&self) -> Result<String> {
+        let auth = self.auth_header().await;
+        if !agro_gate::is_bearer_refused(auth.trim_start_matches("Bearer ")) {
+            return Ok(auth);
+        }
+        if self.try_exchange().await {
+            return Ok(self.auth_header().await);
+        }
+        Err(anyhow!(
+            "Agro no longer accepts this device's credentials; sign in again from the settings"
+        ))
     }
 
     async fn try_exchange(&self) -> bool {
@@ -360,7 +376,7 @@ impl SyncClient {
         variables: serde_json::Value,
     ) -> Result<serde_json::Value> {
         let url = format!("{}/graphql", self.server);
-        let mut auth = self.auth_header().await;
+        let mut auth = self.usable_auth().await?;
         let mut response = self
             .http
             .post(&url)
@@ -370,6 +386,7 @@ impl SyncClient {
             .await
             .context("reaching the Agro server")?;
 
+        agro_gate::note_status(&auth, response.status());
         if response.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
             auth = self.auth_header().await;
             response = self
@@ -412,7 +429,7 @@ impl SyncClient {
             .ok_or_else(|| anyhow!("\"{}\" has not been hashed yet", track.title))?;
 
         let upload_url = format!("{}/api/v1/library/upload", self.server);
-        let mut auth = self.auth_header().await;
+        let mut auth = self.usable_auth().await?;
         let body_json = json!({
             "deviceId": self.device_id,
             "contentHash": hash,
@@ -441,6 +458,7 @@ impl SyncClient {
             .await
             .context("starting the upload")?;
 
+        agro_gate::note_status(&auth, begin.status());
         if begin.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
             auth = self.auth_header().await;
             begin = self
@@ -499,7 +517,7 @@ impl SyncClient {
                 .context("seeking to the resume point")?;
         }
 
-        let auth = self.auth_header().await;
+        let auth = self.usable_auth().await?;
         let response = self
             .http
             .put(format!("{}/api/v1/library/upload/{upload_id}", self.server))
@@ -513,6 +531,7 @@ impl SyncClient {
             .context("sending the file")?;
 
         if !response.status().is_success() {
+            agro_gate::note_status(&auth, response.status());
             return Err(anyhow!("the transfer failed ({})", response.status()));
         }
         let body: serde_json::Value = response.json().await.context("reading the reply")?;
@@ -557,7 +576,7 @@ impl SyncClient {
     /// reachable on this network.
     async fn fetch_over_relay(&self, track: &MissingTrack) -> Option<reqwest::Response> {
         let peer = track.peer_sources.iter().find(|s| !s.is_server_archive)?;
-        let auth = self.auth_header().await;
+        let auth = self.usable_auth().await.ok()?;
         let session_id = self.open_relay_session(peer, track, &auth).await?;
         let recv_url = format!("{}/api/v1/relay/{session_id}/receive", self.server);
         let res = self
@@ -593,6 +612,7 @@ impl SyncClient {
             .await
             .ok()?;
         if !res.status().is_success() {
+            agro_gate::note_status(auth, res.status());
             return None;
         }
         let val = res.json::<serde_json::Value>().await.ok()?;
@@ -608,7 +628,7 @@ impl SyncClient {
             "{}/api/v1/library/fetch/{}",
             self.server, track.content_hash
         );
-        let mut auth = self.auth_header().await;
+        let mut auth = self.usable_auth().await?;
         let mut res = self
             .http
             .get(&fetch_url)
@@ -617,6 +637,7 @@ impl SyncClient {
             .await
             .context("asking the server for the file")?;
 
+        agro_gate::note_status(&auth, res.status());
         if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
             auth = self.auth_header().await;
             res = self

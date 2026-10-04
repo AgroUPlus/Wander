@@ -193,6 +193,14 @@ pub async fn exchange_token(
         .build()
         .unwrap_or_else(|_| Client::new());
 
+    // A login the server already refused would be refused again, and each refusal is a 401 that
+    // access-log bouncers count toward banning this address. See `agro_gate`.
+    if passphrase.trim().is_empty()
+        || crate::integrations::agro_gate::is_login_refused(server, username, passphrase)
+    {
+        anyhow::bail!("Login exchange skipped: these credentials were already refused");
+    }
+
     let login_url = format!("{}/api/v1/login", server.trim_end_matches('/'));
     let body = json!({
         "username": username.trim(),
@@ -202,6 +210,9 @@ pub async fn exchange_token(
 
     let res = client.post(&login_url).json(&body).send().await?;
     let status = res.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        crate::integrations::agro_gate::login_refused(server, username, passphrase);
+    }
     if status.is_success() {
         let json_data: serde_json::Value = res.json().await?;
         if let Some(token) = json_data.get("token").and_then(|t| t.as_str()) {
@@ -368,6 +379,16 @@ impl AgroClient {
     pub async fn graphql(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
         let url = format!("{}/graphql", self.server.trim_end_matches('/'));
         let mut auth = self.auth_header().await;
+        // Every credential this client holds was already refused: sending one anyway would only be
+        // another counted 401. See `agro_gate`.
+        if crate::integrations::agro_gate::is_bearer_refused(auth.trim_start_matches("Bearer ")) {
+            if !self.try_exchange().await {
+                anyhow::bail!(
+                    "Agro no longer accepts this device's credentials; sign in again from the settings"
+                );
+            }
+            auth = self.auth_header().await;
+        }
 
         let mut res = self
             .client
@@ -377,6 +398,7 @@ impl AgroClient {
             .send()
             .await?;
 
+        crate::integrations::agro_gate::note_status(&auth, res.status());
         if res.status() == reqwest::StatusCode::UNAUTHORIZED && self.try_exchange().await {
             auth = self.auth_header().await;
             res = self
