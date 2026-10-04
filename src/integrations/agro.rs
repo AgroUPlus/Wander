@@ -595,6 +595,25 @@ impl AgroClient {
         Ok(uid.to_string())
     }
 
+    /// Opens a sealed handoff with the vault key, unlocking with the config's passphrase first when
+    /// this machine has no key yet and the config still holds one. `None` when it stays sealed.
+    async fn open_sealed_handoff(
+        &self,
+        sealed: &str,
+    ) -> Option<crate::integrations::agro_vault::SealedHandoff> {
+        use crate::integrations::agro_vault;
+        let key = match agro_vault::key_for(self) {
+            Some(key) => key,
+            None => {
+                if !agro_vault::unlock_with_config_passphrase(self, &self.passphrase).await {
+                    return None;
+                }
+                agro_vault::key_for(self)?
+            }
+        };
+        agro_vault::open_handoff(sealed, &key).ok()
+    }
+
     pub async fn fetch_latest_handoff(&self) -> Result<Option<RemoteHandoff>> {
         // `excludeDevice` is what makes this "what is the *rest of* the fleet playing". The
         // account holds one handoff row per device, and this process writes one of them: without
@@ -611,6 +630,7 @@ impl AgroClient {
                     durationMs
                     isPlaying
                     deviceId
+                    encryptedPayload
                 }
             }
         "#;
@@ -632,22 +652,22 @@ impl AgroClient {
             if h.is_null() {
                 return Ok(None);
             }
-            let track_uri = h
+            let mut track_uri = h
                 .get("trackUri")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let track_title = h
+            let mut track_title = h
                 .get("trackTitle")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let artist_name = h
+            let mut artist_name = h
                 .get("artistName")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            let album_name = h
+            let mut album_name = h
                 .get("albumName")
                 .and_then(|v| v.as_str())
                 .map(String::from);
@@ -668,6 +688,21 @@ impl AgroClient {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
+
+            // A private session: the fields above are placeholders, and the track is sealed under
+            // the account's vault key. Opened when this machine holds it; otherwise the
+            // placeholder stands, which is what it is for.
+            if let Some(sealed) = h
+                .get("encryptedPayload")
+                .and_then(|v| v.as_str())
+                .filter(|v| !v.trim().is_empty())
+                && let Some(opened) = self.open_sealed_handoff(sealed).await
+            {
+                track_uri = opened.track_uri.unwrap_or(track_uri);
+                track_title = opened.track_title.unwrap_or(track_title);
+                artist_name = opened.artist_name.unwrap_or(artist_name);
+                album_name = opened.album_name.or(album_name);
+            }
 
             if !track_title.is_empty() {
                 let petname = format!("Node {}", &device_id);

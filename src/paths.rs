@@ -70,7 +70,7 @@ fn adopt_legacy(target: &PathBuf, legacy: impl FnOnce() -> Option<PathBuf>) {
 ///
 /// Blocking the caller is acceptable here. These run at startup and from the settings panel, they
 /// take milliseconds, and the alternative is making three call sites async to save nothing.
-fn off_runtime<T, F>(work: F) -> Result<T>
+pub(crate) fn off_runtime<T, F>(work: F) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,

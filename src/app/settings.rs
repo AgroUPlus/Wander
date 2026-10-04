@@ -353,6 +353,7 @@ impl App {
             | SettingItem::AgroServer
             | SettingItem::AgroUsername
             | SettingItem::AgroPassphrase
+            | SettingItem::AgroPrivateSessions
             | SettingItem::PluginArchiveDownloadDir
             | SettingItem::AddQueueColumn
             | SettingItem::ShowKeybindings
@@ -615,6 +616,7 @@ impl App {
                 crate::integrations::agro::forget_cached_token();
                 self.status_message = Some("Agro credential saved".into());
             }
+            SettingItem::AgroPrivateSessions => self.unlock_private_sessions(value),
             #[cfg(feature = "nyaa")]
             SettingItem::PluginNyaaDownloadDir => {
                 self.config.plugins.nyaa.download_dir =
@@ -695,6 +697,35 @@ impl App {
         self.favorites.clear();
         self.favorites_loaded = false;
         self.bootstrap();
+    }
+
+    /// Opens the account's vault key with `passphrase`, so private sessions show their track. An
+    /// empty line locks again, forgetting the key on this machine.
+    fn unlock_private_sessions(&mut self, passphrase: String) {
+        let agro = self.config.agro.clone();
+        if passphrase.trim().is_empty() {
+            let _ = crate::integrations::agro_vault::forget(&agro.username, &agro.server);
+            self.status_message = Some("Private sessions locked on this machine".into());
+            return;
+        }
+        if !agro.is_ready() {
+            self.status_message = Some("Pair with Agro first".into());
+            return;
+        }
+        self.status_message = Some("Unlocking private sessions…".into());
+        let loads = self.loads.clone();
+        tokio::spawn(async move {
+            let client = crate::integrations::agro::AgroClient::new(
+                agro.server.clone(),
+                agro.username.clone(),
+                agro.passphrase.clone(),
+                agro.device_id.clone(),
+            );
+            let result = crate::integrations::agro_vault::unlock(&client, &passphrase)
+                .await
+                .map_err(|err| format!("{err:#}"));
+            let _ = loads.send(LoadEvent::VaultUnlocked(result));
+        });
     }
 
     pub(crate) fn test_connection(&mut self) {

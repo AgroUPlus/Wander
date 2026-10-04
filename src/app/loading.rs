@@ -367,6 +367,14 @@ impl App {
                 self.push_notification(NotificationLevel::Info, format!("Server test: {result}"));
                 self.finish_operation("server-ping", OperationStatus::Completed);
             }
+            LoadEvent::VaultUnlocked(result) => {
+                let message = match result {
+                    Ok(()) => "Private sessions unlocked".to_string(),
+                    Err(err) => format!("Could not unlock private sessions: {err}"),
+                };
+                self.status_message = Some(message.clone());
+                self.push_notification(NotificationLevel::Info, message);
+            }
             LoadEvent::LocalScanned { songs, albums } => {
                 self.scan_status = Some(format!("{songs} songs, {albums} albums"));
                 let msg = format!("Local library: {songs} songs in {albums} albums");

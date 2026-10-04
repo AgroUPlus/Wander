@@ -60,6 +60,7 @@ pub enum SettingItem {
     AgroServer,
     AgroUsername,
     AgroPassphrase,
+    AgroPrivateSessions,
     AgroDeviceName,
     AgroProxyEnabled,
     SyncP2p,
@@ -123,6 +124,7 @@ impl SettingItem {
             | Self::AgroServer
             | Self::AgroUsername
             | Self::AgroPassphrase
+            | Self::AgroPrivateSessions
             | Self::AgroDeviceName
             | Self::SyncP2p
             | Self::SyncServerArchive
@@ -177,6 +179,7 @@ impl SettingItem {
                 | Self::AgroServer
                 | Self::AgroUsername
                 | Self::AgroPassphrase
+                | Self::AgroPrivateSessions
                 | Self::PluginArchiveDownloadDir
         ) || {
             #[cfg(feature = "nyaa")]
@@ -192,7 +195,10 @@ impl SettingItem {
 
     /// Passwords and passphrases are masked on input.
     pub fn is_secret(self) -> bool {
-        matches!(self, Self::ServerPassword | Self::AgroPassphrase)
+        matches!(
+            self,
+            Self::ServerPassword | Self::AgroPassphrase | Self::AgroPrivateSessions
+        )
     }
 
     /// Deliberately plain ASCII.
@@ -216,6 +222,7 @@ impl SettingItem {
             Self::AgroServer => "Agro server URL".into(),
             Self::AgroUsername => "Agro username".into(),
             Self::AgroPassphrase => "Connect token".into(),
+            Self::AgroPrivateSessions => "Private sessions".into(),
             Self::AgroDeviceName => "Device petname".into(),
             Self::SyncP2p => "P2P device sync".into(),
             Self::SyncServerArchive => "Archive to server".into(),
@@ -283,6 +290,7 @@ pub fn rows(config: &Config) -> Vec<SettingItem> {
         SettingItem::AgroServer,
         SettingItem::AgroUsername,
         SettingItem::AgroPassphrase,
+        SettingItem::AgroPrivateSessions,
         SettingItem::AgroDeviceName,
         SettingItem::AgroProxyEnabled,
         SettingItem::SyncP2p,
@@ -551,6 +559,15 @@ fn value_of(app: &App, item: SettingItem) -> String {
                 "•••••••• (configured)".into()
             }
         }
+
+        // Whether a sealed session reads as its track or as "Private Session". The passphrase opens
+        // the vault key once; the key is what is kept, in the keyring.
+        SettingItem::AgroPrivateSessions => match crate::integrations::agro_vault::state() {
+            crate::integrations::agro_vault::VaultState::Unlocked => {
+                "unlocked (Enter, then an empty line, to lock)".into()
+            }
+            _ => "locked (Enter to unlock with your passphrase)".into(),
+        },
 
         #[cfg(feature = "nyaa")]
         SettingItem::PluginNyaaEnabled => on_off(config.plugins.nyaa.enabled),
@@ -867,11 +884,15 @@ mod tests {
             .into_iter()
             .filter(|item| item.is_secret())
             .collect();
-        // The Agro passphrase joined the server password as a credential: both are masked, and
-        // nothing else on the screen should be.
+        // The Agro passphrase joined the server password as a credential, and the private-session
+        // unlock asks for that same passphrase: all three are masked, and nothing else should be.
         assert_eq!(
             secret,
-            vec![SettingItem::ServerPassword, SettingItem::AgroPassphrase]
+            vec![
+                SettingItem::ServerPassword,
+                SettingItem::AgroPassphrase,
+                SettingItem::AgroPrivateSessions
+            ]
         );
         assert!(SettingItem::ServerPassword.is_text());
         assert!(SettingItem::AgroPassphrase.is_text());

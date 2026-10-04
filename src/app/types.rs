@@ -286,6 +286,8 @@ pub enum LoadEvent {
     CoverResized(Box<ratatui_image::thread::ResizeResponse>),
     /// Outcome of the settings panel's "Test connection".
     ConnectionTested(String),
+    /// Outcome of unlocking private sessions with the passphrase.
+    VaultUnlocked(Result<(), String>),
     /// A local library scan finished, with what it found.
     LocalScanned {
         songs: usize,
